@@ -304,7 +304,6 @@ int main(int argc, char** argv)
             glDrawElements(GL_TRIANGLES, (GLsizei)st.numIndices, GL_UNSIGNED_SHORT, 0);
         }
 
-        gl_check("after draw");
         SDL_GL_SwapWindow(window);
     }
 

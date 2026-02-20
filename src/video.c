@@ -1,6 +1,7 @@
 #include "video.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 static void setup_tex_params(void)
 {
@@ -8,6 +9,33 @@ static void setup_tex_params(void)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+}
+
+static void free_upload_buffers(Video* v)
+{
+    free(v->upload_y);
+    free(v->upload_u);
+    free(v->upload_v);
+    v->upload_y = NULL;
+    v->upload_u = NULL;
+    v->upload_v = NULL;
+    v->upload_y_size = 0;
+    v->upload_u_size = 0;
+    v->upload_v_size = 0;
+}
+
+static int ensure_upload_buffer(guint8** buf, size_t* cap, size_t need)
+{
+    if (*cap >= need)
+        return 1;
+
+    guint8* n = (guint8*)realloc(*buf, need);
+    if (!n)
+        return 0;
+
+    *buf = n;
+    *cap = need;
+    return 1;
 }
 
 void video_reset(Video* v)
@@ -84,6 +112,7 @@ void video_stop(Video* v)
     v->appsink  = NULL;
     v->bus      = NULL;
     v->playing  = 0;
+    free_upload_buffers(v);
 }
 
 void video_delete_textures(Video* v)
@@ -186,24 +215,47 @@ static void upload_i420(Video* v, const GstVideoInfo* info, GstBuffer* buffer)
     }
 
     glBindTexture(GL_TEXTURE_2D, v->texY);
-    for (int y = 0; y < h; y++) {
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y, w, 1,
-                        GL_LUMINANCE, GL_UNSIGNED_BYTE,
-                        dataY + y * strideY);
+    if (strideY == w) {
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h,
+                        GL_LUMINANCE, GL_UNSIGNED_BYTE, dataY);
+    } else {
+        size_t tight = (size_t)w * (size_t)h;
+        if (ensure_upload_buffer(&v->upload_y, &v->upload_y_size, tight)) {
+            for (int y = 0; y < h; y++)
+                memcpy(v->upload_y + (size_t)y * (size_t)w, dataY + (size_t)y * (size_t)strideY, (size_t)w);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h,
+                            GL_LUMINANCE, GL_UNSIGNED_BYTE, v->upload_y);
+        }
     }
 
     glBindTexture(GL_TEXTURE_2D, v->texU);
-    for (int y = 0; y < h/2; y++) {
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y, w/2, 1,
-                        GL_LUMINANCE, GL_UNSIGNED_BYTE,
-                        dataU + y * strideU);
+    int cw = w / 2;
+    int ch = h / 2;
+    if (strideU == cw) {
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, cw, ch,
+                        GL_LUMINANCE, GL_UNSIGNED_BYTE, dataU);
+    } else {
+        size_t tight = (size_t)cw * (size_t)ch;
+        if (ensure_upload_buffer(&v->upload_u, &v->upload_u_size, tight)) {
+            for (int y = 0; y < ch; y++)
+                memcpy(v->upload_u + (size_t)y * (size_t)cw, dataU + (size_t)y * (size_t)strideU, (size_t)cw);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, cw, ch,
+                            GL_LUMINANCE, GL_UNSIGNED_BYTE, v->upload_u);
+        }
     }
 
     glBindTexture(GL_TEXTURE_2D, v->texV);
-    for (int y = 0; y < h/2; y++) {
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y, w/2, 1,
-                        GL_LUMINANCE, GL_UNSIGNED_BYTE,
-                        dataV + y * strideV);
+    if (strideV == cw) {
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, cw, ch,
+                        GL_LUMINANCE, GL_UNSIGNED_BYTE, dataV);
+    } else {
+        size_t tight = (size_t)cw * (size_t)ch;
+        if (ensure_upload_buffer(&v->upload_v, &v->upload_v_size, tight)) {
+            for (int y = 0; y < ch; y++)
+                memcpy(v->upload_v + (size_t)y * (size_t)cw, dataV + (size_t)y * (size_t)strideV, (size_t)cw);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, cw, ch,
+                            GL_LUMINANCE, GL_UNSIGNED_BYTE, v->upload_v);
+        }
     }
 
     gst_video_frame_unmap(&frame);
@@ -215,8 +267,8 @@ void video_update_texture(Video* v)
 
     if (!v || !v->appsink) return;
 
-    // 5ms timeout (still low-latency, but avoids “always NULL” on some decoders)
-    GstSample* sample = gst_app_sink_try_pull_sample((GstAppSink*)v->appsink, 5000000);
+    // Non-blocking pull: never stall the render loop waiting for decode.
+    GstSample* sample = gst_app_sink_try_pull_sample((GstAppSink*)v->appsink, 0);
     if (!sample) return;
 
     GstCaps* caps = gst_sample_get_caps(sample);
