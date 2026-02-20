@@ -1,7 +1,14 @@
 #pragma once
 #include "common.h"
 
-struct gpiod_line* request_line_events(struct gpiod_chip* chip, unsigned int offset, const char* consumer);
+typedef struct {
+    struct gpiod_line_request* req;
+    struct gpiod_edge_event_buffer* buf;
+    int fd;
+} GpioLine;
 
-// PRESS on your board = RISING edge
-void process_line_events(struct gpiod_line* line, void (*on_press)(void*), void* user);
+GpioLine* gpio_request_line(unsigned int offset, const char* consumer);
+void gpio_release_line(GpioLine* l);
+
+/* Non-blocking: calls on_press(user) for each rising edge */
+void gpio_process_events(GpioLine* l, void (*on_press)(void*), void* user);
