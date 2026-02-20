@@ -59,6 +59,6 @@ const char* fragment_shader_src =
     "  float y = texture2D(uTexY, tc).r;"
     "  float u = texture2D(uTexU, tc).r - 0.5;"
     "  float v = texture2D(uTexV, tc).r - 0.5;"
-    "  vec3 rgb = yuv_to_rgb(y, u, v);"
-    "  gl_FragColor = vec4(0.0, 1.0, 0.0, 1.0);"
+    "  vec3 rgb = clamp(yuv_to_rgb(y, u, v), 0.0, 1.0);"
+    "  gl_FragColor = vec4(rgb, uAlpha);"
     "}";

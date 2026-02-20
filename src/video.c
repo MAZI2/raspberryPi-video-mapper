@@ -46,8 +46,9 @@ int video_start(Video* v, const char* filename)
         return 0;
     }
 
-    // Force raw I420 at the sink (fast, avoids videoconvert)
+    // Force raw I420 at the sink.
     GstCaps* want = gst_caps_from_string("video/x-raw,format=I420");
+    gst_app_sink_set_caps((GstAppSink*)v->appsink, want);
     gst_caps_unref(want);
 
     gst_app_sink_set_emit_signals((GstAppSink*)v->appsink, FALSE);
@@ -131,23 +132,20 @@ void video_poll_bus(Video* v)
 
 static void upload_i420(Video* v, const GstVideoInfo* info, GstBuffer* buffer)
 {
+    GstVideoFrame frame;
+    if (!gst_video_frame_map(&frame, info, buffer, GST_MAP_READ))
+        return;
+
     int w = GST_VIDEO_INFO_WIDTH(info);
     int h = GST_VIDEO_INFO_HEIGHT(info);
 
-    GstVideoMeta* meta = gst_buffer_get_video_meta(buffer);
-    if (!meta) return;
+    const guint8* dataY = (const guint8*)GST_VIDEO_FRAME_PLANE_DATA(&frame, 0);
+    const guint8* dataU = (const guint8*)GST_VIDEO_FRAME_PLANE_DATA(&frame, 1);
+    const guint8* dataV = (const guint8*)GST_VIDEO_FRAME_PLANE_DATA(&frame, 2);
 
-    GstMapInfo map;
-    if (!gst_buffer_map(buffer, &map, GST_MAP_READ))
-        return;
-
-    const guint8* dataY = map.data + meta->offset[0];
-    const guint8* dataU = map.data + meta->offset[1];
-    const guint8* dataV = map.data + meta->offset[2];
-
-    int strideY = meta->stride[0];
-    int strideU = meta->stride[1];
-    int strideV = meta->stride[2];
+    int strideY = GST_VIDEO_FRAME_PLANE_STRIDE(&frame, 0);
+    int strideU = GST_VIDEO_FRAME_PLANE_STRIDE(&frame, 1);
+    int strideV = GST_VIDEO_FRAME_PLANE_STRIDE(&frame, 2);
 
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
@@ -208,11 +206,13 @@ static void upload_i420(Video* v, const GstVideoInfo* info, GstBuffer* buffer)
                         dataV + y * strideV);
     }
 
-    gst_buffer_unmap(buffer, &map);
+    gst_video_frame_unmap(&frame);
 }
 
 void video_update_texture(Video* v)
 {
+    static int warned_non_i420 = 0;
+
     if (!v || !v->appsink) return;
 
     // 5ms timeout (still low-latency, but avoids “always NULL” on some decoders)
@@ -226,8 +226,15 @@ void video_update_texture(Video* v)
     if (!caps || !buffer || !gst_video_info_from_caps(&info, caps))
         goto out;
 
-    if (GST_VIDEO_INFO_FORMAT(&info) != GST_VIDEO_FORMAT_I420)
+    if (GST_VIDEO_INFO_FORMAT(&info) != GST_VIDEO_FORMAT_I420) {
+        if (!warned_non_i420) {
+            fprintf(stderr, "Unexpected sink format: %s (expected I420)\n",
+                    gst_video_format_to_string(GST_VIDEO_INFO_FORMAT(&info)));
+            fflush(stderr);
+            warned_non_i420 = 1;
+        }
         goto out;
+    }
 
     GstVideoColorimetry c = info.colorimetry;
     v->video_range = (c.range == GST_VIDEO_COLOR_RANGE_16_235);

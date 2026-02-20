@@ -19,7 +19,6 @@ void ve_init(VideoEngine* ve);
 int  ve_start_current(VideoEngine* ve, const char* path);
 void ve_request_transition(VideoEngine* ve, const char* path);
 void ve_update(VideoEngine* ve);
-void ve_bind_textures_and_blend(VideoEngine* ve, GLint uBlend);
 void ve_shutdown(VideoEngine* ve);
 void ve_bind_video_textures(Video* v,
                             GLint uTexY,
