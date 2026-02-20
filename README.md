@@ -1,31 +1,39 @@
+### Install Dependencies
+
 ```bash
 sudo apt update
 sudo apt install -y \
   build-essential pkg-config \
   libsdl2-dev \
   libgpiod-dev \
+  gpiod \
   libgles2-mesa-dev \
-  libgstreamer1.0-dev \
   libgstreamer-plugins-base1.0-dev \
+  gstreamer1.0-tools \
   gstreamer1.0-plugins-base \
   gstreamer1.0-plugins-good \
   gstreamer1.0-plugins-bad \
   gstreamer1.0-plugins-ugly \
+  libgstreamer1.0-dev \
   gstreamer1.0-libav
 ```
+
+### Add videos to playlist
+
+Add videos to `/raspberryPi-video-mapper/videos` in mp4 format.
+
+### Build
+
+From `/raspberryPi-video-mapper` run:
 
 ```bash
 make -j
 ```
 
-```bash
-gcc test3.c -o mapping_video_keystone `pkg-config --cflags --libs sdl2 gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0 libgpiod` -lGLESv2
-```
+### Start
+
+From `/raspberryPi-video-mapper` run:
 
 ```bash
-sudo systemctl stop getty@tty1
-
-SDL_VIDEODRIVER=kmsdrm ./mapping_video_keystone videos/vid12.mp4 > log.txt 2>&1
-
-tail -f log.txt
+SDL_VIDEODRIVER=kmsdrm ./mapping_video_keystone videos/vid1.mp4
 ```
