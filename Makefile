@@ -5,6 +5,7 @@ LDFLAGS := -flto
 PKGS := sdl2 gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0 libgpiod
 
 SRC := \
+  src/common.c \
   src/shaders.c \
   src/homography.c \
   src/app_state.c \

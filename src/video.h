@@ -1,5 +1,9 @@
 #pragma once
-#include "common.h"
+
+#include <GLES2/gl2.h>
+#include <gst/gst.h>
+#include <gst/app/gstappsink.h>
+#include <gst/video/video.h>
 
 typedef struct {
     GstElement* pipeline;
@@ -9,9 +13,15 @@ typedef struct {
     int width;
     int height;
 
+    // I420 textures
     GLuint texY;
-    GLuint texUV;
+    GLuint texU;
+    GLuint texV;
+
     int tex_inited;
+
+    int video_range; // 1 = video range
+    int bt709;       // 1 = BT.709
 
     char path[1024];
     int playing;

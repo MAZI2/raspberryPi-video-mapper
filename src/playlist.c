@@ -48,7 +48,7 @@ int playlist_load_from_home_videos(Playlist* p, char* out_dir, size_t out_dir_sz
     const char* home = getenv("HOME");
     if (!home) home = "/home/pi";
 
-    snprintf(out_dir, out_dir_sz, "%s/videos", home);
+    snprintf(out_dir, out_dir_sz, "%s/raspberryPi-video-mapper/videos", home);
 
     DIR* d = opendir(out_dir);
     if (!d) {

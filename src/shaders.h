@@ -1,5 +1,5 @@
 #pragma once
-#include "common.h"
+#include <GLES2/gl2.h>
 
 extern const char* vertex_shader_src;
 extern const char* fragment_shader_src;
