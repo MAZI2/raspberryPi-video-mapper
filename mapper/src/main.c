@@ -836,7 +836,6 @@ int main(int argc, char** argv)
     st.numIndices = numIndices;
     st.vbo = vbo;
     st.edit_mode = 0;
-    st.select_mode = 0;
     st.selected_ui = 0;
     st.moveSpeed = 0.02f;
 

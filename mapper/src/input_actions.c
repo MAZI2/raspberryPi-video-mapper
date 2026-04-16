@@ -6,31 +6,8 @@ void on_btn3_toggle_edit(void* u)
     if (!debounce_ok(&s->last_btn3)) return;
 
     s->edit_mode = !s->edit_mode;
-    if (s->edit_mode) s->select_mode = 0;
 
     printf("[BTN3] EDIT %s\n", s->edit_mode ? "ON" : "OFF");
-    print_status(s);
-}
-
-void on_btn2_toggle_select_move(void* u)
-{
-    AppState* s = (AppState*)u;
-    if (!debounce_ok(&s->last_btn2)) return;
-    if (!s->edit_mode) return;
-
-    s->select_mode = !s->select_mode;
-    printf("[BTN2] MODE %s\n", s->select_mode ? "SELECT" : "MOVE");
-    print_status(s);
-}
-
-void on_btn1_cycle_corner_only(void* u)
-{
-    AppState* s = (AppState*)u;
-    if (!debounce_ok(&s->last_btn1)) return;
-    if (!s->edit_mode || !s->select_mode) return;
-
-    s->selected_ui = (s->selected_ui + 1) % 4;
-    printf("[BTN1] SELECT %s\n", corner_name_ui(s->selected_ui));
     print_status(s);
 }
 

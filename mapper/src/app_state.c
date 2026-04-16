@@ -15,7 +15,6 @@ void print_status(AppState* s)
 
     printf("\n====================\n");
     printf("EDIT MODE : %s\n", s->edit_mode ? "ON" : "OFF");
-    printf("SUBMODE   : %s\n", s->select_mode ? "SELECT" : "MOVE");
     printf("SELECTED  : %s  (x=%.3f, y=%.3f)\n", corner_name_ui(s->selected_ui), cx, cy);
     printf("CORNERS   : TL(%.3f,%.3f) TR(%.3f,%.3f) BL(%.3f,%.3f) BR(%.3f,%.3f)\n",
            s->corners[C_TL][0], s->corners[C_TL][1],

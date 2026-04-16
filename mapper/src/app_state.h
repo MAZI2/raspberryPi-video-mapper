@@ -3,7 +3,6 @@
 
 typedef struct {
     int edit_mode;
-    int select_mode;
     int selected_ui;   // 0..3 (TL,TR,BL,BR)
     float moveSpeed;
 
@@ -15,7 +14,7 @@ typedef struct {
     int numIndices;
     GLuint vbo;
 
-    Uint32 last_btn1, last_btn2, last_btn3;
+    Uint32 last_btn1, last_btn3;
     Uint32 last_up, last_down, last_left, last_right;
 } AppState;
 
