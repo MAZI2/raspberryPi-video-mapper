@@ -44,6 +44,12 @@ static int ve_prepare_thread_fn(void* userdata)
     SDL_UnlockMutex(ve->prep_mutex);
 
     int ok = video_start_with_options(&tmp, path, loop_on_eos);
+    if (ok && tmp.pipeline) {
+        // Keep prefetched clip prerolled but not running ahead to EOS.
+        gst_element_set_state(tmp.pipeline, GST_STATE_PAUSED);
+        gst_element_seek_simple(tmp.pipeline, GST_FORMAT_TIME,
+            (GstSeekFlags)(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT), 0);
+    }
 
     SDL_LockMutex(ve->prep_mutex);
     ve->prep_inflight = 0;
@@ -190,6 +196,14 @@ static void ve_try_start_next(VideoEngine* ve)
             ve->nxt = ve->prep_video;
             video_reset(&ve->prep_video);
             ve->prep_ready = 0;
+            if (ve->nxt.pipeline) {
+                // Ensure prefetched media starts from the beginning when promoted.
+                gst_element_seek_simple(ve->nxt.pipeline, GST_FORMAT_TIME,
+                    (GstSeekFlags)(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT), 0);
+                gst_element_set_state(ve->nxt.pipeline, GST_STATE_PLAYING);
+                ve->nxt.eos_hit = 0;
+                ve->nxt.playing = 1;
+            }
         }
         if (prep_ready && !prep_match)
             ve_discard_prepared_locked(ve);
