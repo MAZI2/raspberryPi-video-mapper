@@ -3,6 +3,65 @@
 #include <stdio.h>
 #include <string.h>
 
+static void ve_discard_prepared_locked(VideoEngine* ve)
+{
+    if (!ve->prep_ready)
+        return;
+    video_stop(&ve->prep_video);
+    video_reset(&ve->prep_video);
+    ve->prep_ready = 0;
+}
+
+static int ve_prepare_thread_fn(void* userdata)
+{
+    VideoEngine* ve = (VideoEngine*)userdata;
+    char path[1024];
+    int loop_on_eos = 1;
+    Video tmp;
+
+    SDL_LockMutex(ve->prep_mutex);
+    snprintf(path, sizeof(path), "%s", ve->prep_path);
+    loop_on_eos = ve->prep_loop_on_eos;
+    SDL_UnlockMutex(ve->prep_mutex);
+
+    int ok = video_start_with_options(&tmp, path, loop_on_eos);
+
+    SDL_LockMutex(ve->prep_mutex);
+    ve->prep_inflight = 0;
+    if (ok) {
+        ve_discard_prepared_locked(ve);
+        ve->prep_video = tmp;
+        ve->prep_ready = 1;
+    } else {
+        ve->prep_failed = 1;
+    }
+    SDL_UnlockMutex(ve->prep_mutex);
+    return 0;
+}
+
+static int ve_start_prepare_async(VideoEngine* ve, const char* path, int loop_on_eos)
+{
+    if (!ve->prep_mutex)
+        return 0;
+
+    SDL_LockMutex(ve->prep_mutex);
+    snprintf(ve->prep_path, sizeof(ve->prep_path), "%s", path);
+    ve->prep_loop_on_eos = loop_on_eos ? 1 : 0;
+    ve->prep_failed = 0;
+    ve->prep_inflight = 1;
+    SDL_UnlockMutex(ve->prep_mutex);
+
+    ve->prep_thread = SDL_CreateThread(ve_prepare_thread_fn, "ve_prepare", ve);
+    if (!ve->prep_thread) {
+        SDL_LockMutex(ve->prep_mutex);
+        ve->prep_inflight = 0;
+        ve->prep_failed = 1;
+        SDL_UnlockMutex(ve->prep_mutex);
+        return 0;
+    }
+    return 1;
+}
+
 /* ================= Engine lifecycle ================= */
 
 void ve_init(VideoEngine* ve)
@@ -10,6 +69,7 @@ void ve_init(VideoEngine* ve)
     memset(ve, 0, sizeof(*ve));
     ve->xfade_seconds = XFADE_SECONDS;
     ve->pending_loop_on_eos = 1;
+    ve->prep_mutex = SDL_CreateMutex();
 }
 
 int ve_start_current(VideoEngine* ve, const char* path)
@@ -46,21 +106,71 @@ void ve_request_transition_opts(VideoEngine* ve, const char* path, int loop_on_e
 
 static void ve_try_start_next(VideoEngine* ve)
 {
+    int prep_inflight = 0;
+    int prep_match = 0;
+    int prep_ready = 0;
+
     if (!ve->pending || ve->transitioning)
         return;
 
-    if (!video_start_with_options(&ve->nxt, ve->pending_path, ve->pending_loop_on_eos)) {
+    if (ve->prep_mutex) {
+        SDL_LockMutex(ve->prep_mutex);
+        prep_inflight = ve->prep_inflight;
+        SDL_UnlockMutex(ve->prep_mutex);
+    }
+
+    if (ve->prep_thread && !prep_inflight) {
+        SDL_WaitThread(ve->prep_thread, NULL);
+        ve->prep_thread = NULL;
+    }
+
+    if (ve->prep_mutex) {
+        SDL_LockMutex(ve->prep_mutex);
+        prep_ready = ve->prep_ready;
+        prep_match = prep_ready &&
+                     (strcmp(ve->prep_path, ve->pending_path) == 0) &&
+                     (ve->prep_loop_on_eos == ve->pending_loop_on_eos);
+
+        if (prep_match) {
+            ve->nxt = ve->prep_video;
+            video_reset(&ve->prep_video);
+            ve->prep_ready = 0;
+        }
+        if (prep_ready && !prep_match)
+            ve_discard_prepared_locked(ve);
+
+        prep_inflight = ve->prep_inflight;
+        SDL_UnlockMutex(ve->prep_mutex);
+    }
+
+    if (prep_match) {
         ve->pending = 0;
+        ve->transitioning = 1;
+        ve->blend = 0.0f;
+        ve->xfade_start_ms = 0;
+
+        printf("[VE] Next started (async): %s\n", ve->nxt.path);
+        fflush(stdout);
         return;
     }
 
-    ve->pending = 0;
-    ve->transitioning = 1;
-    ve->blend = 0.0f;
-    ve->xfade_start_ms = 0;
+    if (prep_inflight)
+        return;
 
-    printf("[VE] Next started: %s\n", ve->nxt.path);
-    fflush(stdout);
+    if (!ve_start_prepare_async(ve, ve->pending_path, ve->pending_loop_on_eos)) {
+        if (!video_start_with_options(&ve->nxt, ve->pending_path, ve->pending_loop_on_eos)) {
+            ve->pending = 0;
+            return;
+        }
+
+        ve->pending = 0;
+        ve->transitioning = 1;
+        ve->blend = 0.0f;
+        ve->xfade_start_ms = 0;
+
+        printf("[VE] Next started (sync fallback): %s\n", ve->nxt.path);
+        fflush(stdout);
+    }
 }
 
 void ve_update(VideoEngine* ve)
@@ -170,6 +280,18 @@ void ve_bind_video_textures(Video* v,
 
 void ve_shutdown(VideoEngine* ve)
 {
+    if (ve->prep_thread) {
+        SDL_WaitThread(ve->prep_thread, NULL);
+        ve->prep_thread = NULL;
+    }
+    if (ve->prep_mutex) {
+        SDL_LockMutex(ve->prep_mutex);
+        ve_discard_prepared_locked(ve);
+        SDL_UnlockMutex(ve->prep_mutex);
+        SDL_DestroyMutex(ve->prep_mutex);
+        ve->prep_mutex = NULL;
+    }
+
     video_stop(&ve->cur);
     video_stop(&ve->nxt);
     video_delete_textures(&ve->cur);

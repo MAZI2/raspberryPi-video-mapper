@@ -14,6 +14,16 @@ typedef struct {
     char pending_path[1024];   // requested next
     int pending;               // request queued
     int pending_loop_on_eos;
+
+    // Async prepare path to avoid blocking render loop on gst_parse_launch/set_state.
+    SDL_Thread* prep_thread;
+    SDL_mutex* prep_mutex;
+    Video prep_video;
+    char prep_path[1024];
+    int prep_loop_on_eos;
+    int prep_inflight;
+    int prep_ready;
+    int prep_failed;
 } VideoEngine;
 
 void ve_init(VideoEngine* ve);
