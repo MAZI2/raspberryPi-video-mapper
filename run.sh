@@ -86,12 +86,27 @@ resolve_usb_videos_root() {
 sync_video_cache() {
   local source_dir="$1"
   local cache_dir="$2"
-  local sync_output=""
+  local sync_log=""
   local changed_count=""
 
   mkdir -p "$cache_dir"
-  sync_output="$(rsync -a --delete --checksum --itemize-changes "$source_dir"/ "$cache_dir"/)"
-  changed_count="$(printf '%s\n' "$sync_output" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
+  sync_log="$(mktemp)"
+
+  printf 'Syncing video cache\n'
+  printf '  Source: %s\n' "$source_dir"
+  printf '  Cache:  %s\n' "$cache_dir"
+
+  rsync \
+    -a \
+    --delete \
+    --checksum \
+    --itemize-changes \
+    --info=progress2 \
+    --out-format='%i %n%L' \
+    "$source_dir"/ "$cache_dir"/ | tee "$sync_log"
+
+  changed_count="$(sed '/^[[:space:]]*$/d' "$sync_log" | wc -l | tr -d ' ')"
+  rm -f "$sync_log"
 
   if [[ "$changed_count" == "0" ]]; then
     printf 'Video cache is already up to date: %s\n' "$cache_dir"
