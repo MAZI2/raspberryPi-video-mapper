@@ -17,6 +17,7 @@ typedef struct {
     GLuint texY;
     GLuint texU;
     GLuint texV;
+    GLuint texA;
 
     int tex_inited;
 
@@ -27,9 +28,12 @@ typedef struct {
     guint8* upload_y;
     guint8* upload_u;
     guint8* upload_v;
+    guint8* upload_a;
     size_t upload_y_size;
     size_t upload_u_size;
     size_t upload_v_size;
+    size_t upload_a_size;
+    int alpha_opaque;
 
     char path[1024];
     int playing;

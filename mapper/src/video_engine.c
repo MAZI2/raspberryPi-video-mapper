@@ -143,7 +143,8 @@ int ve_current_eos(VideoEngine* ve)
 void ve_bind_video_textures(Video* v,
                             GLint uTexY,
                             GLint uTexU,
-                            GLint uTexV)
+                            GLint uTexV,
+                            GLint uTexA)
 {
     if (!v->tex_inited)
         return;
@@ -159,6 +160,10 @@ void ve_bind_video_textures(Video* v,
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, v->texV);
     glUniform1i(uTexV, 2);
+
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, v->texA);
+    glUniform1i(uTexA, 3);
 }
 
 /* ================= Shutdown ================= */

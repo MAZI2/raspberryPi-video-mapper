@@ -3,6 +3,10 @@
 #include <string.h>
 #include <stdlib.h>
 
+#ifndef GST_VIDEO_FORMAT_A420
+#define GST_VIDEO_FORMAT_A420 ((GstVideoFormat)-1)
+#endif
+
 static void setup_tex_params(void)
 {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -16,12 +20,15 @@ static void free_upload_buffers(Video* v)
     free(v->upload_y);
     free(v->upload_u);
     free(v->upload_v);
+    free(v->upload_a);
     v->upload_y = NULL;
     v->upload_u = NULL;
     v->upload_v = NULL;
+    v->upload_a = NULL;
     v->upload_y_size = 0;
     v->upload_u_size = 0;
     v->upload_v_size = 0;
+    v->upload_a_size = 0;
 }
 
 static int ensure_upload_buffer(guint8** buf, size_t* cap, size_t need)
@@ -43,6 +50,7 @@ void video_reset(Video* v)
     memset(v, 0, sizeof(*v));
     v->loop_on_eos = 1;
     v->eos_hit = 0;
+    v->alpha_opaque = 0;
 }
 
 int video_start_with_options(Video* v, const char* filename, int loop_on_eos)
@@ -56,10 +64,9 @@ int video_start_with_options(Video* v, const char* filename, int loop_on_eos)
     "filesrc location=\"%s\" ! "
     "decodebin ! "
     "videoconvert ! "
-    "video/x-raw,format=I420 ! "
     "appsink name=sink sync=false max-buffers=1 drop=true",
     filename
-);
+    );
 
     GError* err = NULL;
     v->pipeline = gst_parse_launch(pipe, &err);
@@ -77,10 +84,12 @@ int video_start_with_options(Video* v, const char* filename, int loop_on_eos)
         return 0;
     }
 
-    // Force raw I420 at the sink.
-    GstCaps* want = gst_caps_from_string("video/x-raw,format=I420");
-    gst_app_sink_set_caps((GstAppSink*)v->appsink, want);
-    gst_caps_unref(want);
+    // Prefer A420 (YUV + alpha) and fall back to I420.
+    GstCaps* want = gst_caps_from_string("video/x-raw,format=(string){A420,I420}");
+    if (want) {
+        gst_app_sink_set_caps((GstAppSink*)v->appsink, want);
+        gst_caps_unref(want);
+    }
 
     gst_app_sink_set_emit_signals((GstAppSink*)v->appsink, FALSE);
     gst_app_sink_set_drop((GstAppSink*)v->appsink, TRUE);
@@ -94,7 +103,7 @@ int video_start_with_options(Video* v, const char* filename, int loop_on_eos)
         return 0;
     }
 
-    fprintf(stderr, "Video started (decodebin -> appsink I420): %s\n", filename);
+    fprintf(stderr, "Video started (decodebin -> appsink A420/I420): %s\n", filename);
     fflush(stderr);
     v->playing = 1;
     return 1;
@@ -130,7 +139,8 @@ void video_delete_textures(Video* v)
         glDeleteTextures(1, &v->texY);
         glDeleteTextures(1, &v->texU);
         glDeleteTextures(1, &v->texV);
-        v->texY = v->texU = v->texV = 0;
+        glDeleteTextures(1, &v->texA);
+        v->texY = v->texU = v->texV = v->texA = 0;
         v->tex_inited = 0;
     }
 }
@@ -172,7 +182,7 @@ void video_poll_bus(Video* v)
     }
 }
 
-static void upload_i420(Video* v, const GstVideoInfo* info, GstBuffer* buffer)
+static void upload_yuva420(Video* v, const GstVideoInfo* info, GstBuffer* buffer, int has_alpha_plane)
 {
     GstVideoFrame frame;
     if (!gst_video_frame_map(&frame, info, buffer, GST_MAP_READ))
@@ -184,10 +194,12 @@ static void upload_i420(Video* v, const GstVideoInfo* info, GstBuffer* buffer)
     const guint8* dataY = (const guint8*)GST_VIDEO_FRAME_PLANE_DATA(&frame, 0);
     const guint8* dataU = (const guint8*)GST_VIDEO_FRAME_PLANE_DATA(&frame, 1);
     const guint8* dataV = (const guint8*)GST_VIDEO_FRAME_PLANE_DATA(&frame, 2);
+    const guint8* dataA = has_alpha_plane ? (const guint8*)GST_VIDEO_FRAME_PLANE_DATA(&frame, 3) : NULL;
 
     int strideY = GST_VIDEO_FRAME_PLANE_STRIDE(&frame, 0);
     int strideU = GST_VIDEO_FRAME_PLANE_STRIDE(&frame, 1);
     int strideV = GST_VIDEO_FRAME_PLANE_STRIDE(&frame, 2);
+    int strideA = has_alpha_plane ? GST_VIDEO_FRAME_PLANE_STRIDE(&frame, 3) : 0;
 
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
@@ -196,11 +208,13 @@ static void upload_i420(Video* v, const GstVideoInfo* info, GstBuffer* buffer)
             glDeleteTextures(1, &v->texY);
             glDeleteTextures(1, &v->texU);
             glDeleteTextures(1, &v->texV);
+            glDeleteTextures(1, &v->texA);
             v->tex_inited = 0;
         }
 
         v->width = w;
         v->height = h;
+        v->alpha_opaque = 0;
 
         glGenTextures(1, &v->texY);
         glBindTexture(GL_TEXTURE_2D, v->texY);
@@ -220,10 +234,18 @@ static void upload_i420(Video* v, const GstVideoInfo* info, GstBuffer* buffer)
         glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, w/2, h/2, 0,
                      GL_LUMINANCE, GL_UNSIGNED_BYTE, NULL);
 
+        glGenTextures(1, &v->texA);
+        glBindTexture(GL_TEXTURE_2D, v->texA);
+        setup_tex_params();
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, w, h, 0,
+                     GL_LUMINANCE, GL_UNSIGNED_BYTE, NULL);
+
         v->tex_inited = 1;
 
-        fprintf(stderr, "Textures init (I420) %dx%d strideY=%d strideU=%d strideV=%d\n",
-                w, h, strideY, strideU, strideV);
+        fprintf(stderr, "Textures init (%s) %dx%d strideY=%d strideU=%d strideV=%d%s\n",
+                has_alpha_plane ? "A420" : "I420",
+                w, h, strideY, strideU, strideV,
+                has_alpha_plane ? "" : " (opaque alpha)");
         fflush(stderr);
     }
 
@@ -271,12 +293,40 @@ static void upload_i420(Video* v, const GstVideoInfo* info, GstBuffer* buffer)
         }
     }
 
+    glBindTexture(GL_TEXTURE_2D, v->texA);
+    if (has_alpha_plane) {
+        if (strideA == w) {
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h,
+                            GL_LUMINANCE, GL_UNSIGNED_BYTE, dataA);
+        } else {
+            size_t tight = (size_t)w * (size_t)h;
+            if (ensure_upload_buffer(&v->upload_a, &v->upload_a_size, tight)) {
+                for (int y = 0; y < h; y++) {
+                    memcpy(v->upload_a + (size_t)y * (size_t)w,
+                           dataA + (size_t)y * (size_t)strideA,
+                           (size_t)w);
+                }
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h,
+                                GL_LUMINANCE, GL_UNSIGNED_BYTE, v->upload_a);
+            }
+        }
+        v->alpha_opaque = 0;
+    } else if (!v->alpha_opaque) {
+        size_t tight = (size_t)w * (size_t)h;
+        if (ensure_upload_buffer(&v->upload_a, &v->upload_a_size, tight)) {
+            memset(v->upload_a, 255, tight);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h,
+                            GL_LUMINANCE, GL_UNSIGNED_BYTE, v->upload_a);
+            v->alpha_opaque = 1;
+        }
+    }
+
     gst_video_frame_unmap(&frame);
 }
 
 void video_update_texture(Video* v)
 {
-    static int warned_non_i420 = 0;
+    static int warned_non_yuva420 = 0;
 
     if (!v || !v->appsink) return;
 
@@ -291,12 +341,13 @@ void video_update_texture(Video* v)
     if (!caps || !buffer || !gst_video_info_from_caps(&info, caps))
         goto out;
 
-    if (GST_VIDEO_INFO_FORMAT(&info) != GST_VIDEO_FORMAT_I420) {
-        if (!warned_non_i420) {
-            fprintf(stderr, "Unexpected sink format: %s (expected I420)\n",
+    GstVideoFormat fmt = GST_VIDEO_INFO_FORMAT(&info);
+    if (fmt != GST_VIDEO_FORMAT_I420 && fmt != GST_VIDEO_FORMAT_A420) {
+        if (!warned_non_yuva420) {
+            fprintf(stderr, "Unexpected sink format: %s (expected A420 or I420)\n",
                     gst_video_format_to_string(GST_VIDEO_INFO_FORMAT(&info)));
             fflush(stderr);
-            warned_non_i420 = 1;
+            warned_non_yuva420 = 1;
         }
         goto out;
     }
@@ -305,7 +356,7 @@ void video_update_texture(Video* v)
     v->video_range = (c.range == GST_VIDEO_COLOR_RANGE_16_235);
     v->bt709       = (c.matrix == GST_VIDEO_COLOR_MATRIX_BT709);
 
-    upload_i420(v, &info, buffer);
+    upload_yuva420(v, &info, buffer, fmt == GST_VIDEO_FORMAT_A420);
 
 out:
     gst_sample_unref(sample);

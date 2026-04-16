@@ -452,11 +452,14 @@ static int show_prepare_freund(ShowContext* show, const char** initial_video, in
         return 0;
     }
 
-    *initial_video = playlist_first(&show->freund.background);
-    *initial_loop = 1;
+    show->freund.active_pair_idx = 0;
+    show->freund.state = FREUND_STATE_TRANSITION;
+    *initial_video = show->freund.pairs[0].transition_path;
+    *initial_loop = 0;
 
-    printf("[FREUND] Loaded %d pair(s), background=%s\n",
+    printf("[FREUND] Loaded %d pair(s), background=%s, initial transition=%s\n",
            show->freund.pair_count,
+           playlist_first(&show->freund.background) ? playlist_first(&show->freund.background) : "(null)",
            *initial_video ? *initial_video : "(null)");
     return (*initial_video != NULL);
 }
@@ -576,9 +579,8 @@ static void freund_request_loop_for_active(ShowContext* show, VideoEngine* ve)
 
 static void show_after_start(ShowContext* show, VideoEngine* ve)
 {
-    if (show->mode == MODE_FREUND && show->freund.pair_count > 0) {
-        freund_request_pair(show, ve, 0);
-    }
+    (void)show;
+    (void)ve;
 }
 
 static void show_on_btn1_non_edit(ShowContext* show, VideoEngine* ve)
@@ -818,6 +820,7 @@ int main(int argc, char** argv)
     GLint uTexY = glGetUniformLocation(program, "uTexY");
     GLint uTexU = glGetUniformLocation(program, "uTexU");
     GLint uTexV = glGetUniformLocation(program, "uTexV");
+    GLint uTexA = glGetUniformLocation(program, "uTexA");
     GLint uRange = glGetUniformLocation(program, "uVideoRange");
     GLint u709 = glGetUniformLocation(program, "uBT709");
     GLint uAlpha = glGetUniformLocation(program, "uAlpha");
@@ -825,6 +828,7 @@ int main(int argc, char** argv)
     if (uTexY >= 0) glUniform1i(uTexY, 0);
     if (uTexU >= 0) glUniform1i(uTexU, 1);
     if (uTexV >= 0) glUniform1i(uTexV, 2);
+    if (uTexA >= 0) glUniform1i(uTexA, 3);
     if (uAlpha >= 0) glUniform1f(uAlpha, 1.0f);
 
     AppState st;
@@ -856,19 +860,32 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    VideoEngine ve;
-    ve_init(&ve);
+    VideoEngine ve_fg;
+    VideoEngine ve_bg;
+    int use_background_layer = (show.mode == MODE_FREUND);
+    ve_init(&ve_fg);
+    ve_init(&ve_bg);
 
 #if PROJECT_DISABLE_XFADE
-    ve_set_xfade_seconds(&ve, 0.0f);
+    ve_set_xfade_seconds(&ve_fg, 0.0f);
 #endif
 
-    if (!ve_start_current_opts(&ve, initial_video, initial_loop)) {
-        fprintf(stderr, "Failed to start video: %s\n", initial_video ? initial_video : "(null)");
+    if (!ve_start_current_opts(&ve_fg, initial_video, initial_loop)) {
+        fprintf(stderr, "Failed to start foreground video: %s\n", initial_video ? initial_video : "(null)");
         fflush(stderr);
     }
 
-    show_after_start(&show, &ve);
+    if (use_background_layer) {
+        const char* bg_video = playlist_first(&show.freund.background);
+        if (!bg_video || !ve_start_current_opts(&ve_bg, bg_video, 1)) {
+            fprintf(stderr, "Failed to start background video: %s\n", bg_video ? bg_video : "(null)");
+            fflush(stderr);
+        } else {
+            printf("[FREUND] Background layer -> %s\n", bg_video);
+        }
+    }
+
+    show_after_start(&show, &ve_fg);
 
     const char* consumer = "mapping_video_keystone";
     GpioLine* line_btn1 = gpio_request_line(GPIO_BTN1, consumer);
@@ -882,7 +899,7 @@ int main(int argc, char** argv)
     Btn1Context btn1_ctx = {
         .st = &st,
         .show = &show,
-        .ve = &ve
+        .ve = &ve_fg
     };
 
     glClearColor(0.f, 0.f, 0.f, 1.f);
@@ -897,8 +914,11 @@ int main(int argc, char** argv)
             }
         }
 
-        ve_update(&ve);
-        show_update(&show, &ve);
+        ve_update(&ve_fg);
+        if (use_background_layer) {
+            ve_update(&ve_bg);
+        }
+        show_update(&show, &ve_fg);
 
         gpio_process_events(line_btn3, on_btn3_toggle_edit, &st);
         gpio_process_events(line_btn2, on_btn2_toggle_select_move, &st);
@@ -913,24 +933,39 @@ int main(int argc, char** argv)
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        if (ve.cur.tex_inited) {
+        if (use_background_layer && ve_bg.cur.tex_inited) {
             glDisable(GL_BLEND);
             if (uAlpha >= 0) glUniform1f(uAlpha, 1.0f);
-            if (uRange >= 0) glUniform1i(uRange, ve.cur.video_range);
-            if (u709 >= 0) glUniform1i(u709, ve.cur.bt709);
-            ve_bind_video_textures(&ve.cur, uTexY, uTexU, uTexV);
+            if (uRange >= 0) glUniform1i(uRange, ve_bg.cur.video_range);
+            if (u709 >= 0) glUniform1i(u709, ve_bg.cur.bt709);
+            ve_bind_video_textures(&ve_bg.cur, uTexY, uTexU, uTexV, uTexA);
             glDrawElements(GL_TRIANGLES, (GLsizei)st.numIndices, GL_UNSIGNED_SHORT, 0);
         }
 
-        if (ve.transitioning && ve.nxt.tex_inited) {
+        if (ve_fg.cur.tex_inited) {
+            if (use_background_layer) {
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            } else {
+                glDisable(GL_BLEND);
+            }
+
+            if (uAlpha >= 0) glUniform1f(uAlpha, 1.0f);
+            if (uRange >= 0) glUniform1i(uRange, ve_fg.cur.video_range);
+            if (u709 >= 0) glUniform1i(u709, ve_fg.cur.bt709);
+            ve_bind_video_textures(&ve_fg.cur, uTexY, uTexU, uTexV, uTexA);
+            glDrawElements(GL_TRIANGLES, (GLsizei)st.numIndices, GL_UNSIGNED_SHORT, 0);
+        }
+
+        if (ve_fg.transitioning && ve_fg.nxt.tex_inited) {
             glEnable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-            if (uAlpha >= 0) glUniform1f(uAlpha, ve.blend);
-            if (uRange >= 0) glUniform1i(uRange, ve.nxt.video_range);
-            if (u709 >= 0) glUniform1i(u709, ve.nxt.bt709);
+            if (uAlpha >= 0) glUniform1f(uAlpha, ve_fg.blend);
+            if (uRange >= 0) glUniform1i(uRange, ve_fg.nxt.video_range);
+            if (u709 >= 0) glUniform1i(u709, ve_fg.nxt.bt709);
 
-            ve_bind_video_textures(&ve.nxt, uTexY, uTexU, uTexV);
+            ve_bind_video_textures(&ve_fg.nxt, uTexY, uTexU, uTexV, uTexA);
             glDrawElements(GL_TRIANGLES, (GLsizei)st.numIndices, GL_UNSIGNED_SHORT, 0);
         }
 
@@ -945,7 +980,8 @@ int main(int argc, char** argv)
     gpio_release_line(line_left);
     gpio_release_line(line_right);
 
-    ve_shutdown(&ve);
+    ve_shutdown(&ve_fg);
+    ve_shutdown(&ve_bg);
     show_context_free(&show);
 
     glDeleteBuffers(1, &vbo);

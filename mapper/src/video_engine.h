@@ -28,4 +28,5 @@ int  ve_current_eos(VideoEngine* ve);
 void ve_bind_video_textures(Video* v,
                             GLint uTexY,
                             GLint uTexU,
-                            GLint uTexV);
+                            GLint uTexV,
+                            GLint uTexA);

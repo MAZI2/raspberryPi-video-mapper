@@ -35,6 +35,7 @@ const char* fragment_shader_src =
     "uniform sampler2D uTexY;"
     "uniform sampler2D uTexU;"
     "uniform sampler2D uTexV;"
+    "uniform sampler2D uTexA;"
     "uniform int uVideoRange;"
     "uniform int uBT709;"
     "uniform float uAlpha;"
@@ -59,6 +60,7 @@ const char* fragment_shader_src =
     "  float y = texture2D(uTexY, tc).r;"
     "  float u = texture2D(uTexU, tc).r - 0.5;"
     "  float v = texture2D(uTexV, tc).r - 0.5;"
+    "  float a = texture2D(uTexA, tc).r;"
     "  vec3 rgb = clamp(yuv_to_rgb(y, u, v), 0.0, 1.0);"
-    "  gl_FragColor = vec4(rgb, uAlpha);"
+    "  gl_FragColor = vec4(rgb, a * uAlpha);"
     "}";

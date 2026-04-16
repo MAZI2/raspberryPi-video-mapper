@@ -20,7 +20,14 @@ sudo apt install -y \
 
 ### Add videos to playlist
 
-Add videos to `/raspberryPi-video-mapper/videos` in mp4 format.
+Add videos to `/raspberryPi-video-mapper/videos`.
+
+Supported extensions include:
+- `.mp4`
+- `.mov`
+- `.mkv`
+- `.m4v`
+- `.ts`
 
 ### Build
 
@@ -35,5 +42,5 @@ make -j
 From `/raspberryPi-video-mapper` run:
 
 ```bash
-SDL_VIDEODRIVER=kmsdrm ./mapping_video_keystone videos/vid1.mp4
+SDL_VIDEODRIVER=kmsdrm ./mapping_video_keystone videos/vid1.mov
 ```
