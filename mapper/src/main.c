@@ -577,21 +577,6 @@ static void freund_request_loop_for_active(ShowContext* show, VideoEngine* ve)
     ve_request_transition_opts(ve, pair->loop_path, 1);
 }
 
-static void freund_prefetch_next_pair(ShowContext* show, VideoEngine* ve)
-{
-    int next_idx;
-    const FreundPair* pair;
-
-    if (!show || !ve || show->freund.pair_count <= 1)
-        return;
-    if (show->freund.active_pair_idx < 0 || show->freund.active_pair_idx >= show->freund.pair_count)
-        return;
-
-    next_idx = (show->freund.active_pair_idx + 1) % show->freund.pair_count;
-    pair = &show->freund.pairs[next_idx];
-    ve_prefetch_transition_opts(ve, pair->transition_path, 0);
-}
-
 static void show_after_start(ShowContext* show, VideoEngine* ve)
 {
     (void)show;
@@ -678,19 +663,6 @@ static void show_update(ShowContext* show, VideoEngine* ve)
                 ve_request_transition_opts(ve, idle, 1);
             }
         }
-    }
-}
-
-static void show_maintenance(ShowContext* show, VideoEngine* ve)
-{
-    if (!show || !ve)
-        return;
-
-    if (show->mode == MODE_FREUND &&
-        show->freund.state == FREUND_STATE_LOOP &&
-        !ve->pending &&
-        !ve->transitioning) {
-        freund_prefetch_next_pair(show, ve);
     }
 }
 
@@ -943,7 +915,6 @@ int main(int argc, char** argv)
         }
         ve_update(&ve_fg);
         show_update(&show, &ve_fg);
-        show_maintenance(&show, &ve_fg);
 
         gpio_process_events(line_btn3, on_btn3_toggle_edit, &st);
         gpio_process_events(line_btn1, on_btn1_edit_or_show_action, &btn1_ctx);
