@@ -619,6 +619,10 @@ static void show_on_btn1_non_edit(ShowContext* show, VideoEngine* ve)
             printf("[BTN1] FREUND click ignored (state=%d)\n", (int)show->freund.state);
             return;
         }
+        if (ve->transitioning || ve->pending) {
+            printf("[BTN1] FREUND click ignored (transition still active)\n");
+            return;
+        }
 
         int next_idx = (show->freund.active_pair_idx + 1) % show->freund.pair_count;
         freund_request_pair(show, ve, next_idx);
