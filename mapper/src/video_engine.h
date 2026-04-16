@@ -6,6 +6,7 @@ typedef struct {
     Video cur;
     Video nxt;
     Video prep;
+    int prefer_alpha;
     int transitioning;
 
     float blend;               // 0..1
@@ -30,6 +31,7 @@ void ve_prepare_transition_opts(VideoEngine* ve, const char* path, int loop_on_e
 void ve_update(VideoEngine* ve);
 void ve_shutdown(VideoEngine* ve);
 void ve_set_xfade_seconds(VideoEngine* ve, float seconds);
+void ve_set_prefer_alpha(VideoEngine* ve, int prefer_alpha);
 int  ve_current_eos(VideoEngine* ve);
 void ve_bind_video_textures(Video* v,
                             GLint uTexY,

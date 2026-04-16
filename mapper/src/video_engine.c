@@ -3,6 +3,19 @@
 #include <stdio.h>
 #include <string.h>
 
+static void ve_apply_prefer_alpha(VideoEngine* ve)
+{
+    int prefer_alpha;
+
+    if (!ve)
+        return;
+
+    prefer_alpha = ve->prefer_alpha ? 1 : 0;
+    ve->cur.prefer_alpha = prefer_alpha;
+    ve->nxt.prefer_alpha = prefer_alpha;
+    ve->prep.prefer_alpha = prefer_alpha;
+}
+
 static void ve_discard_prepared(VideoEngine* ve)
 {
     if (!ve->prep_ready)
@@ -50,6 +63,8 @@ void ve_init(VideoEngine* ve)
     memset(ve, 0, sizeof(*ve));
     ve->xfade_seconds = XFADE_SECONDS;
     ve->pending_loop_on_eos = 1;
+    ve->prefer_alpha = 1;
+    ve_apply_prefer_alpha(ve);
 }
 
 int ve_start_current(VideoEngine* ve, const char* path)
@@ -59,6 +74,7 @@ int ve_start_current(VideoEngine* ve, const char* path)
 
 int ve_start_current_opts(VideoEngine* ve, const char* path, int loop_on_eos)
 {
+    ve->cur.prefer_alpha = ve->prefer_alpha ? 1 : 0;
     if (!video_start_with_options(&ve->cur, path, loop_on_eos))
         return 0;
 
@@ -102,6 +118,7 @@ void ve_prepare_transition_opts(VideoEngine* ve, const char* path, int loop_on_e
         ve_discard_prepared(ve);
     }
 
+    ve->prep.prefer_alpha = ve->prefer_alpha ? 1 : 0;
     if (!video_start_with_options(&ve->prep, path, loop_on_eos))
         return;
 
@@ -135,6 +152,7 @@ static void ve_try_start_next(VideoEngine* ve)
         return;
     }
 
+    ve->nxt.prefer_alpha = ve->prefer_alpha ? 1 : 0;
     if (!video_start_with_options(&ve->nxt, ve->pending_path, ve->pending_loop_on_eos)) {
         ve->pending = 0;
         return;
@@ -211,6 +229,15 @@ void ve_set_xfade_seconds(VideoEngine* ve, float seconds)
     if (!ve)
         return;
     ve->xfade_seconds = seconds;
+}
+
+void ve_set_prefer_alpha(VideoEngine* ve, int prefer_alpha)
+{
+    if (!ve)
+        return;
+
+    ve->prefer_alpha = prefer_alpha ? 1 : 0;
+    ve_apply_prefer_alpha(ve);
 }
 
 int ve_current_eos(VideoEngine* ve)

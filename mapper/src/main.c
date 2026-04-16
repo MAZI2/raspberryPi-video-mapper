@@ -890,7 +890,8 @@ int main(int argc, char** argv)
     int use_background_layer = (show.mode == MODE_FREUND);
     ve_init(&ve_fg);
     ve_init(&ve_bg);
-    ve_bg.cur.prefer_alpha = 0;
+    ve_set_prefer_alpha(&ve_fg, 1);
+    ve_set_prefer_alpha(&ve_bg, 0);
 
 #if PROJECT_DISABLE_XFADE
     ve_set_xfade_seconds(&ve_fg, 0.0f);
