@@ -634,6 +634,10 @@ static void show_on_btn1_non_edit(ShowContext* show, VideoEngine* ve)
             printf("[BTN1] OMAHEN click ignored (state=%d)\n", (int)show->omahen.state);
             return;
         }
+        if (ve->transitioning || ve->pending) {
+            printf("[BTN1] OMAHEN click ignored (transition still active)\n");
+            return;
+        }
 
         const char* transition = playlist_random(&show->omahen.transitions, NULL);
         const char* answer = playlist_random(&show->omahen.answers, NULL);
