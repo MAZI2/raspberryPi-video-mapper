@@ -34,6 +34,7 @@ typedef struct {
     size_t upload_v_size;
     size_t upload_a_size;
     int alpha_opaque;
+    int prefer_alpha;
 
     char path[1024];
     int playing;

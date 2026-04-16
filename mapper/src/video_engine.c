@@ -3,6 +3,46 @@
 #include <stdio.h>
 #include <string.h>
 
+static void ve_discard_prepared(VideoEngine* ve)
+{
+    if (!ve->prep_ready)
+        return;
+
+    video_stop(&ve->prep);
+    video_delete_textures(&ve->prep);
+    video_reset(&ve->prep);
+    ve->prep_path[0] = '\0';
+    ve->prep_loop_on_eos = 0;
+    ve->prep_ready = 0;
+}
+
+static int ve_promote_prepared(VideoEngine* ve)
+{
+    if (!ve->prep_ready)
+        return 0;
+
+    if (strcmp(ve->prep_path, ve->pending_path) != 0 ||
+        ve->prep_loop_on_eos != ve->pending_loop_on_eos) {
+        return 0;
+    }
+
+    ve->nxt = ve->prep;
+    video_reset(&ve->prep);
+    ve->prep_path[0] = '\0';
+    ve->prep_loop_on_eos = 0;
+    ve->prep_ready = 0;
+
+    if (ve->nxt.pipeline) {
+        gst_element_seek_simple(ve->nxt.pipeline, GST_FORMAT_TIME,
+            (GstSeekFlags)(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT), 0);
+        gst_element_set_state(ve->nxt.pipeline, GST_STATE_PLAYING);
+        ve->nxt.eos_hit = 0;
+        ve->nxt.playing = 1;
+    }
+
+    return 1;
+}
+
 /* ================= Engine lifecycle ================= */
 
 void ve_init(VideoEngine* ve)
@@ -44,10 +84,56 @@ void ve_request_transition_opts(VideoEngine* ve, const char* path, int loop_on_e
     fflush(stdout);
 }
 
+void ve_prepare_transition(VideoEngine* ve, const char* path)
+{
+    ve_prepare_transition_opts(ve, path, 1);
+}
+
+void ve_prepare_transition_opts(VideoEngine* ve, const char* path, int loop_on_eos)
+{
+    if (!ve || !path || !path[0] || ve->transitioning || ve->pending)
+        return;
+
+    if (ve->prep_ready) {
+        if (strcmp(ve->prep_path, path) == 0 &&
+            ve->prep_loop_on_eos == (loop_on_eos ? 1 : 0)) {
+            return;
+        }
+        ve_discard_prepared(ve);
+    }
+
+    if (!video_start_with_options(&ve->prep, path, loop_on_eos))
+        return;
+
+    if (ve->prep.pipeline) {
+        gst_element_set_state(ve->prep.pipeline, GST_STATE_PAUSED);
+        gst_element_seek_simple(ve->prep.pipeline, GST_FORMAT_TIME,
+            (GstSeekFlags)(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT), 0);
+    }
+
+    snprintf(ve->prep_path, sizeof(ve->prep_path), "%s", path);
+    ve->prep_loop_on_eos = loop_on_eos ? 1 : 0;
+    ve->prep_ready = 1;
+
+    printf("[VE] Prepared next: %s (loop=%d)\n", ve->prep_path, ve->prep_loop_on_eos);
+    fflush(stdout);
+}
+
 static void ve_try_start_next(VideoEngine* ve)
 {
     if (!ve->pending || ve->transitioning)
         return;
+
+    if (ve_promote_prepared(ve)) {
+        ve->pending = 0;
+        ve->transitioning = 1;
+        ve->blend = 0.0f;
+        ve->xfade_start_ms = 0;
+
+        printf("[VE] Next started (prepared): %s\n", ve->nxt.path);
+        fflush(stdout);
+        return;
+    }
 
     if (!video_start_with_options(&ve->nxt, ve->pending_path, ve->pending_loop_on_eos)) {
         ve->pending = 0;
@@ -170,6 +256,7 @@ void ve_bind_video_textures(Video* v,
 
 void ve_shutdown(VideoEngine* ve)
 {
+    ve_discard_prepared(ve);
     video_stop(&ve->cur);
     video_stop(&ve->nxt);
     video_delete_textures(&ve->cur);

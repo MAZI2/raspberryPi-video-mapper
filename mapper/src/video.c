@@ -43,10 +43,12 @@ static int ensure_upload_buffer(guint8** buf, size_t* cap, size_t need)
 
 void video_reset(Video* v)
 {
+    int prefer_alpha = v ? v->prefer_alpha : 1;
     memset(v, 0, sizeof(*v));
     v->loop_on_eos = 1;
     v->eos_hit = 0;
     v->alpha_opaque = 0;
+    v->prefer_alpha = prefer_alpha ? 1 : 0;
 }
 
 int video_start_with_options(Video* v, const char* filename, int loop_on_eos)
@@ -81,8 +83,11 @@ int video_start_with_options(Video* v, const char* filename, int loop_on_eos)
         return 0;
     }
 
-    // Prefer A420 (YUV + alpha) and fall back to I420.
-    GstCaps* want = gst_caps_from_string("video/x-raw,format=(string){A420,I420}");
+    // Background-only paths can force I420 to avoid unnecessary alpha conversion work.
+    GstCaps* want = gst_caps_from_string(
+        v->prefer_alpha ? "video/x-raw,format=(string){A420,I420}"
+                        : "video/x-raw,format=(string)I420"
+    );
     if (want) {
         gst_app_sink_set_caps((GstAppSink*)v->appsink, want);
         gst_caps_unref(want);
@@ -100,7 +105,9 @@ int video_start_with_options(Video* v, const char* filename, int loop_on_eos)
         return 0;
     }
 
-    fprintf(stderr, "Video started (decodebin -> appsink A420/I420): %s\n", filename);
+    fprintf(stderr, "Video started (decodebin -> appsink %s): %s\n",
+            v->prefer_alpha ? "A420/I420" : "I420",
+            filename);
     fflush(stderr);
     v->playing = 1;
     return 1;
