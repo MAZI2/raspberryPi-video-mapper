@@ -12,6 +12,25 @@ static void ve_discard_prepared_locked(VideoEngine* ve)
     ve->prep_ready = 0;
 }
 
+static int ve_is_prep_inflight(VideoEngine* ve)
+{
+    int inflight = 0;
+    if (!ve->prep_mutex)
+        return 0;
+    SDL_LockMutex(ve->prep_mutex);
+    inflight = ve->prep_inflight;
+    SDL_UnlockMutex(ve->prep_mutex);
+    return inflight;
+}
+
+static void ve_join_prep_if_done(VideoEngine* ve)
+{
+    if (ve->prep_thread && !ve_is_prep_inflight(ve)) {
+        SDL_WaitThread(ve->prep_thread, NULL);
+        ve->prep_thread = NULL;
+    }
+}
+
 static int ve_prepare_thread_fn(void* userdata)
 {
     VideoEngine* ve = (VideoEngine*)userdata;
@@ -104,6 +123,49 @@ void ve_request_transition_opts(VideoEngine* ve, const char* path, int loop_on_e
     fflush(stdout);
 }
 
+void ve_prefetch_transition(VideoEngine* ve, const char* path)
+{
+    ve_prefetch_transition_opts(ve, path, 1);
+}
+
+void ve_prefetch_transition_opts(VideoEngine* ve, const char* path, int loop_on_eos)
+{
+    int should_start = 0;
+
+    if (!path || !path[0])
+        return;
+    if (!ve->prep_mutex)
+        return;
+
+    ve_join_prep_if_done(ve);
+
+    SDL_LockMutex(ve->prep_mutex);
+    if (ve->prep_inflight) {
+        SDL_UnlockMutex(ve->prep_mutex);
+        return;
+    }
+
+    if (ve->prep_ready) {
+        int match = (strcmp(ve->prep_path, path) == 0) &&
+                    (ve->prep_loop_on_eos == (loop_on_eos ? 1 : 0));
+        if (!match) {
+            ve_discard_prepared_locked(ve);
+        } else {
+            SDL_UnlockMutex(ve->prep_mutex);
+            return;
+        }
+    }
+
+    snprintf(ve->prep_path, sizeof(ve->prep_path), "%s", path);
+    ve->prep_loop_on_eos = loop_on_eos ? 1 : 0;
+    ve->prep_failed = 0;
+    should_start = 1;
+    SDL_UnlockMutex(ve->prep_mutex);
+
+    if (should_start)
+        (void)ve_start_prepare_async(ve, path, loop_on_eos);
+}
+
 static void ve_try_start_next(VideoEngine* ve)
 {
     int prep_inflight = 0;
@@ -113,16 +175,9 @@ static void ve_try_start_next(VideoEngine* ve)
     if (!ve->pending || ve->transitioning)
         return;
 
-    if (ve->prep_mutex) {
-        SDL_LockMutex(ve->prep_mutex);
-        prep_inflight = ve->prep_inflight;
-        SDL_UnlockMutex(ve->prep_mutex);
-    }
-
-    if (ve->prep_thread && !prep_inflight) {
-        SDL_WaitThread(ve->prep_thread, NULL);
-        ve->prep_thread = NULL;
-    }
+    prep_inflight = ve_is_prep_inflight(ve);
+    if (ve->prep_thread && !prep_inflight)
+        ve_join_prep_if_done(ve);
 
     if (ve->prep_mutex) {
         SDL_LockMutex(ve->prep_mutex);
@@ -280,6 +335,7 @@ void ve_bind_video_textures(Video* v,
 
 void ve_shutdown(VideoEngine* ve)
 {
+    ve_join_prep_if_done(ve);
     if (ve->prep_thread) {
         SDL_WaitThread(ve->prep_thread, NULL);
         ve->prep_thread = NULL;
