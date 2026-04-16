@@ -3,10 +3,6 @@
 #include <string.h>
 #include <stdlib.h>
 
-#ifndef GST_VIDEO_FORMAT_A420
-#define GST_VIDEO_FORMAT_A420 ((GstVideoFormat)-1)
-#endif
-
 static void setup_tex_params(void)
 {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -342,10 +338,14 @@ void video_update_texture(Video* v)
         goto out;
 
     GstVideoFormat fmt = GST_VIDEO_INFO_FORMAT(&info);
-    if (fmt != GST_VIDEO_FORMAT_I420 && fmt != GST_VIDEO_FORMAT_A420) {
+    const char* fmt_name = gst_video_format_to_string(fmt);
+    int is_i420 = (fmt == GST_VIDEO_FORMAT_I420);
+    int is_a420 = (fmt_name && strcmp(fmt_name, "A420") == 0);
+
+    if (!is_i420 && !is_a420) {
         if (!warned_non_yuva420) {
             fprintf(stderr, "Unexpected sink format: %s (expected A420 or I420)\n",
-                    gst_video_format_to_string(GST_VIDEO_INFO_FORMAT(&info)));
+                    fmt_name ? fmt_name : "unknown");
             fflush(stderr);
             warned_non_yuva420 = 1;
         }
@@ -356,7 +356,7 @@ void video_update_texture(Video* v)
     v->video_range = (c.range == GST_VIDEO_COLOR_RANGE_16_235);
     v->bt709       = (c.matrix == GST_VIDEO_COLOR_MATRIX_BT709);
 
-    upload_yuva420(v, &info, buffer, fmt == GST_VIDEO_FORMAT_A420);
+    upload_yuva420(v, &info, buffer, is_a420);
 
 out:
     gst_sample_unref(sample);
