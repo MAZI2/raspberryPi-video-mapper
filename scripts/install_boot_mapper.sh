@@ -64,10 +64,15 @@ mount_partition_temporarily() {
 }
 
 find_source_dir() {
-  local device type transport mount_point scan_mount candidate temp_mount
+  local device type transport mount_point scan_mount candidate temp_mount part_label
 
   while read -r device type transport mount_point; do
     [[ "${type}" == "part" && "${transport}" == "usb" ]] || continue
+
+    if [[ -n "${CONFIGURED_USB_LABEL}" ]]; then
+      part_label="$(lsblk -no LABEL "${device}" 2>/dev/null | head -n1 | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+      [[ "${part_label}" == "${CONFIGURED_USB_LABEL}" ]] || continue
+    fi
 
     temp_mount=""
     scan_mount="${mount_point:-}"
@@ -243,6 +248,11 @@ deploy_candidate() {
 
 mkdir -p "${LOCAL_PROJECT_ROOT}" "${TEMP_MOUNT_BASE}"
 
+CONFIGURED_USB_LABEL="$(get_config_value "usb_label" "")"
+if [[ -n "${CONFIGURED_USB_LABEL}" ]]; then
+  log "Using configured USB label filter: ${CONFIGURED_USB_LABEL}"
+fi
+
 log "Searching USB drives for ${USB_RELATIVE_PATH}"
 source_dir=""
 source_root=""
@@ -324,33 +334,11 @@ if ! should_start_app; then
   exit 0
 fi
 
-media_root=""
-if [[ -n "${source_root}" ]]; then
-  if [[ -d "${source_root}/videos" ]]; then
-    media_root="${source_root}/videos"
-  else
-    source_mount="$(dirname "${source_root}")"
-    if [[ -d "${source_mount}/videos" ]]; then
-      media_root="${source_mount}/videos"
-    fi
-  fi
-fi
-
-if [[ -z "${media_root}" && -d "${LOCAL_PROJECT_ROOT}/videos" ]]; then
-  media_root="${LOCAL_PROJECT_ROOT}/videos"
-fi
-
-if [[ -n "${media_root}" ]]; then
-  log "Using media root: ${media_root}"
-else
-  log "No videos directory found on USB; app will use its internal fallback lookup"
-fi
-
 log "Launching ${BINARY_NAME}"
 (
   cd "${LOCAL_MAPPER_DIR}"
-  if [[ -n "${media_root}" ]]; then
-    SDL_VIDEODRIVER=kmsdrm MAPPER_MEDIA_ROOT="${media_root}" "./${BINARY_NAME}"
+  if [[ -n "${CONFIGURED_USB_LABEL}" ]]; then
+    SDL_VIDEODRIVER=kmsdrm MAPPER_USB_LABEL="${CONFIGURED_USB_LABEL}" "./${BINARY_NAME}"
   else
     SDL_VIDEODRIVER=kmsdrm "./${BINARY_NAME}"
   fi

@@ -12,11 +12,14 @@
 #include <gst/gst.h>
 
 #include <ctype.h>
+#include <limits.h>
+#include <mntent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
 #include <strings.h>
 #include <time.h>
+#include <unistd.h>
 
 typedef enum {
     MODE_CORE_RANDOM = 0,
@@ -95,6 +98,62 @@ static int path_is_dir(const char* path)
     return (path && stat(path, &st) == 0 && S_ISDIR(st.st_mode));
 }
 
+static int find_videos_under_root(const char* root, char* out, size_t out_sz)
+{
+    char candidate[1024];
+
+    snprintf(candidate, sizeof(candidate), "%s/videos", root);
+    if (path_is_dir(candidate)) {
+        snprintf(out, out_sz, "%s", candidate);
+        return 1;
+    }
+
+    snprintf(candidate, sizeof(candidate), "%s/raspberryPi-video-mapper/videos", root);
+    if (path_is_dir(candidate)) {
+        snprintf(out, out_sz, "%s", candidate);
+        return 1;
+    }
+
+    return 0;
+}
+
+static int resolve_usb_label_device(const char* label, char* out_dev, size_t out_dev_sz)
+{
+    char by_label[1024];
+    char resolved[PATH_MAX];
+
+    if (!label || !label[0]) {
+        return 0;
+    }
+
+    snprintf(by_label, sizeof(by_label), "/dev/disk/by-label/%s", label);
+    if (!realpath(by_label, resolved)) {
+        return 0;
+    }
+
+    snprintf(out_dev, out_dev_sz, "%s", resolved);
+    return 1;
+}
+
+static int fs_source_matches_device(const char* fs_source, const char* wanted_dev)
+{
+    char resolved[PATH_MAX];
+
+    if (!wanted_dev || !wanted_dev[0]) {
+        return 1;
+    }
+
+    if (strcmp(fs_source, wanted_dev) == 0) {
+        return 1;
+    }
+
+    if (realpath(fs_source, resolved) && strcmp(resolved, wanted_dev) == 0) {
+        return 1;
+    }
+
+    return 0;
+}
+
 static int parse_step_prefix(const char* path, int* out_step)
 {
     const char* name = path_basename(path);
@@ -152,9 +211,36 @@ static const char* project_mode_name(ProjectMode mode)
 static int detect_media_root(char* out, size_t out_sz)
 {
     const char* env_root = getenv("MAPPER_MEDIA_ROOT");
+    const char* usb_label = getenv("MAPPER_USB_LABEL");
+    char wanted_usb_dev[PATH_MAX];
+    wanted_usb_dev[0] = '\0';
+
     if (env_root && env_root[0] && path_is_dir(env_root)) {
         snprintf(out, out_sz, "%s", env_root);
         return 1;
+    }
+
+    if (usb_label && usb_label[0]) {
+        if (resolve_usb_label_device(usb_label, wanted_usb_dev, sizeof(wanted_usb_dev))) {
+            printf("[MEDIA] USB label filter: %s -> %s\n", usb_label, wanted_usb_dev);
+        } else {
+            printf("[MEDIA] USB label '%s' is not currently resolvable\n", usb_label);
+        }
+    }
+
+    FILE* mounts = setmntent("/proc/mounts", "r");
+    if (mounts) {
+        struct mntent* ent;
+        while ((ent = getmntent(mounts)) != NULL) {
+            if (wanted_usb_dev[0] && !fs_source_matches_device(ent->mnt_fsname, wanted_usb_dev)) {
+                continue;
+            }
+            if (find_videos_under_root(ent->mnt_dir, out, out_sz)) {
+                endmntent(mounts);
+                return 1;
+            }
+        }
+        endmntent(mounts);
     }
 
     const char* home = getenv("HOME");
@@ -164,15 +250,13 @@ static int detect_media_root(char* out, size_t out_sz)
 
     char candidate[1024];
 
-    snprintf(candidate, sizeof(candidate), "%s/raspberryPi-video-mapper/videos", home);
-    if (path_is_dir(candidate)) {
-        snprintf(out, out_sz, "%s", candidate);
+    snprintf(candidate, sizeof(candidate), "%s", home);
+    if (find_videos_under_root(candidate, out, out_sz)) {
         return 1;
     }
 
-    snprintf(candidate, sizeof(candidate), "%s", "/opt/raspberryPi-video-mapper/videos");
-    if (path_is_dir(candidate)) {
-        snprintf(out, out_sz, "%s", candidate);
+    snprintf(candidate, sizeof(candidate), "%s", "/opt/raspberryPi-video-mapper");
+    if (find_videos_under_root(candidate, out, out_sz)) {
         return 1;
     }
 
