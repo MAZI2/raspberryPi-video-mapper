@@ -325,14 +325,25 @@ if ! should_start_app; then
 fi
 
 media_root=""
-if [[ -n "${source_root}" && -d "${source_root}/videos" ]]; then
-  media_root="${source_root}/videos"
-elif [[ -d "${LOCAL_PROJECT_ROOT}/videos" ]]; then
+if [[ -n "${source_root}" ]]; then
+  if [[ -d "${source_root}/videos" ]]; then
+    media_root="${source_root}/videos"
+  else
+    source_mount="$(dirname "${source_root}")"
+    if [[ -d "${source_mount}/videos" ]]; then
+      media_root="${source_mount}/videos"
+    fi
+  fi
+fi
+
+if [[ -z "${media_root}" && -d "${LOCAL_PROJECT_ROOT}/videos" ]]; then
   media_root="${LOCAL_PROJECT_ROOT}/videos"
 fi
 
 if [[ -n "${media_root}" ]]; then
   log "Using media root: ${media_root}"
+else
+  log "No videos directory found on USB; app will use its internal fallback lookup"
 fi
 
 log "Launching ${BINARY_NAME}"
