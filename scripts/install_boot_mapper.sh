@@ -16,6 +16,8 @@ set -euo pipefail
 USB_RELATIVE_PATH="raspberryPi-video-mapper/mapper"
 LOCAL_PROJECT_ROOT="/opt/raspberryPi-video-mapper"
 LOCAL_MAPPER_DIR="${LOCAL_PROJECT_ROOT}/mapper"
+BOOT_CONFIG_NAME="start_on_boot.conf"
+LOCAL_BOOT_CONFIG="${LOCAL_PROJECT_ROOT}/${BOOT_CONFIG_NAME}"
 BINARY_NAME="mapping_video_keystone"
 BOOT_WAIT_SECONDS=30
 BOOT_WAIT_INTERVAL=2
@@ -121,6 +123,33 @@ sync_project() {
   cp -a "${source_dir}" "${destination_dir}"
 }
 
+should_start_app() {
+  local value="true"
+  local line
+
+  if [[ -f "${LOCAL_BOOT_CONFIG}" ]]; then
+    line="$(grep -E '^[[:space:]]*start_on_boot[[:space:]]*=' "${LOCAL_BOOT_CONFIG}" | tail -n 1 || true)"
+    if [[ -n "${line}" ]]; then
+      value="${line#*=}"
+    else
+      line="$(grep -E '^[[:space:]]*(true|false|1|0|yes|no|on|off)[[:space:]]*$' "${LOCAL_BOOT_CONFIG}" | tail -n 1 || true)"
+      if [[ -n "${line}" ]]; then
+        value="${line}"
+      fi
+    fi
+  fi
+
+  value="$(printf '%s' "${value}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+  case "${value}" in
+    1|true|yes|on) return 0 ;;
+    0|false|no|off) return 1 ;;
+    *)
+      log "Invalid ${BOOT_CONFIG_NAME} value '${value}', defaulting to start"
+      return 0
+      ;;
+  esac
+}
+
 mkdir -p "${LOCAL_PROJECT_ROOT}" "${TEMP_MOUNT_BASE}"
 
 log "Searching USB drives for ${USB_RELATIVE_PATH}"
@@ -137,6 +166,15 @@ done
 updated=0
 if [[ -n "${source_dir}" ]]; then
   log "Found project on USB: ${source_dir}"
+  source_root="$(dirname "${source_dir}")"
+
+  if [[ -f "${source_root}/${BOOT_CONFIG_NAME}" ]]; then
+    if [[ ! -f "${LOCAL_BOOT_CONFIG}" ]] || ! cmp -s "${source_root}/${BOOT_CONFIG_NAME}" "${LOCAL_BOOT_CONFIG}"; then
+      cp "${source_root}/${BOOT_CONFIG_NAME}" "${LOCAL_BOOT_CONFIG}"
+      log "Updated ${BOOT_CONFIG_NAME}"
+    fi
+  fi
+
   if project_differs "${source_dir}" "${LOCAL_MAPPER_DIR}"; then
     log "Updating local project copy at ${LOCAL_MAPPER_DIR}"
     sync_project "${source_dir}" "${LOCAL_MAPPER_DIR}"
@@ -159,6 +197,11 @@ if [[ "${updated}" -eq 1 || ! -x "${LOCAL_MAPPER_DIR}/${BINARY_NAME}" ]]; then
     cd "${LOCAL_MAPPER_DIR}"
     make -j
   )
+fi
+
+if ! should_start_app; then
+  log "${BOOT_CONFIG_NAME} disables startup; skipping launch"
+  exit 0
 fi
 
 log "Launching ${BINARY_NAME}"
