@@ -12,12 +12,14 @@
 #include <gst/gst.h>
 
 #include <ctype.h>
+#include <errno.h>
 #include <limits.h>
 #include <mntent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
 #include <strings.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -154,6 +156,81 @@ static int fs_source_matches_device(const char* fs_source, const char* wanted_de
     return 0;
 }
 
+static int run_cmd_wait(char* const argv[])
+{
+    pid_t pid = fork();
+    if (pid < 0) {
+        return 0;
+    }
+
+    if (pid == 0) {
+        execvp(argv[0], argv);
+        _exit(127);
+    }
+
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0) {
+        return 0;
+    }
+
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+static int find_mount_for_device(const char* wanted_dev, char* out_mount, size_t out_mount_sz)
+{
+    FILE* mounts = setmntent("/proc/mounts", "r");
+    if (!mounts) {
+        return 0;
+    }
+
+    int found = 0;
+    struct mntent* ent;
+    while ((ent = getmntent(mounts)) != NULL) {
+        if (fs_source_matches_device(ent->mnt_fsname, wanted_dev)) {
+            snprintf(out_mount, out_mount_sz, "%s", ent->mnt_dir);
+            found = 1;
+            break;
+        }
+    }
+
+    endmntent(mounts);
+    return found;
+}
+
+static int ensure_device_mounted(const char* wanted_dev, char* out_mount, size_t out_mount_sz)
+{
+    if (!wanted_dev || !wanted_dev[0]) {
+        return 0;
+    }
+
+    if (find_mount_for_device(wanted_dev, out_mount, out_mount_sz)) {
+        return 1;
+    }
+
+    if (mkdir("/run/mapper-usb", 0755) != 0 && errno != EEXIST) {
+        return 0;
+    }
+
+    const char* base = strrchr(wanted_dev, '/');
+    base = base ? (base + 1) : wanted_dev;
+
+    char mount_point[1024];
+    snprintf(mount_point, sizeof(mount_point), "/run/mapper-usb/%s", base);
+    if (mkdir(mount_point, 0755) != 0 && errno != EEXIST) {
+        return 0;
+    }
+
+    char* cmd1[] = { "mount", (char*)wanted_dev, mount_point, NULL };
+    if (!run_cmd_wait(cmd1)) {
+        char* cmd2[] = { "mount", "-o", "ro", (char*)wanted_dev, mount_point, NULL };
+        if (!run_cmd_wait(cmd2)) {
+            return 0;
+        }
+    }
+
+    return find_mount_for_device(wanted_dev, out_mount, out_mount_sz);
+}
+
 static int parse_step_prefix(const char* path, int* out_step)
 {
     const char* name = path_basename(path);
@@ -213,7 +290,9 @@ static int detect_media_root(char* out, size_t out_sz)
     const char* env_root = getenv("MAPPER_MEDIA_ROOT");
     const char* usb_label = getenv("MAPPER_USB_LABEL");
     char wanted_usb_dev[PATH_MAX];
+    char mounted_dir[1024];
     wanted_usb_dev[0] = '\0';
+    mounted_dir[0] = '\0';
 
     if (env_root && env_root[0] && path_is_dir(env_root)) {
         snprintf(out, out_sz, "%s", env_root);
@@ -223,6 +302,14 @@ static int detect_media_root(char* out, size_t out_sz)
     if (usb_label && usb_label[0]) {
         if (resolve_usb_label_device(usb_label, wanted_usb_dev, sizeof(wanted_usb_dev))) {
             printf("[MEDIA] USB label filter: %s -> %s\n", usb_label, wanted_usb_dev);
+            if (ensure_device_mounted(wanted_usb_dev, mounted_dir, sizeof(mounted_dir))) {
+                printf("[MEDIA] USB mounted at: %s\n", mounted_dir);
+                if (find_videos_under_root(mounted_dir, out, out_sz)) {
+                    return 1;
+                }
+            } else {
+                printf("[MEDIA] Failed to auto-mount %s (need root privileges?)\n", wanted_usb_dev);
+            }
         } else {
             printf("[MEDIA] USB label '%s' is not currently resolvable\n", usb_label);
         }
