@@ -676,11 +676,9 @@ static void on_btn1_edit_or_show_action(void* u)
     }
 
     if (st->edit_mode) {
-        if (st->select_mode) {
-            st->selected_ui = (st->selected_ui + 1) % 4;
-            printf("[BTN1] SELECT %s\n", corner_name_ui(st->selected_ui));
-            print_status(st);
-        }
+        st->selected_ui = (st->selected_ui + 1) % 4;
+        printf("[BTN1] SELECT %s\n", corner_name_ui(st->selected_ui));
+        print_status(st);
         return;
     }
 
@@ -838,7 +836,7 @@ int main(int argc, char** argv)
     st.numIndices = numIndices;
     st.vbo = vbo;
     st.edit_mode = 0;
-    st.select_mode = 1;
+    st.select_mode = 0;
     st.selected_ui = 0;
     st.moveSpeed = 0.02f;
 
@@ -889,7 +887,6 @@ int main(int argc, char** argv)
 
     const char* consumer = "mapping_video_keystone";
     GpioLine* line_btn1 = gpio_request_line(GPIO_BTN1, consumer);
-    GpioLine* line_btn2 = gpio_request_line(GPIO_BTN2, consumer);
     GpioLine* line_btn3 = gpio_request_line(GPIO_BTN3, consumer);
     GpioLine* line_up = gpio_request_line(GPIO_UP, consumer);
     GpioLine* line_down = gpio_request_line(GPIO_DOWN, consumer);
@@ -921,7 +918,6 @@ int main(int argc, char** argv)
         show_update(&show, &ve_fg);
 
         gpio_process_events(line_btn3, on_btn3_toggle_edit, &st);
-        gpio_process_events(line_btn2, on_btn2_toggle_select_move, &st);
         gpio_process_events(line_btn1, on_btn1_edit_or_show_action, &btn1_ctx);
         gpio_process_events(line_up, on_up, &st);
         gpio_process_events(line_down, on_down, &st);
@@ -973,7 +969,6 @@ int main(int argc, char** argv)
     }
 
     gpio_release_line(line_btn1);
-    gpio_release_line(line_btn2);
     gpio_release_line(line_btn3);
     gpio_release_line(line_up);
     gpio_release_line(line_down);

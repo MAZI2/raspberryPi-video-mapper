@@ -6,7 +6,7 @@ void on_btn3_toggle_edit(void* u)
     if (!debounce_ok(&s->last_btn3)) return;
 
     s->edit_mode = !s->edit_mode;
-    if (s->edit_mode) s->select_mode = 1;
+    if (s->edit_mode) s->select_mode = 0;
 
     printf("[BTN3] EDIT %s\n", s->edit_mode ? "ON" : "OFF");
     print_status(s);
@@ -49,7 +49,7 @@ void on_up(void* u)
 {
     AppState* s = (AppState*)u;
     if (!debounce_ok(&s->last_up)) return;
-    if (!s->edit_mode || s->select_mode) return;
+    if (!s->edit_mode) return;
     move_selected_corner(s, 0.0f, s->moveSpeed);
 }
 
@@ -57,7 +57,7 @@ void on_down(void* u)
 {
     AppState* s = (AppState*)u;
     if (!debounce_ok(&s->last_down)) return;
-    if (!s->edit_mode || s->select_mode) return;
+    if (!s->edit_mode) return;
     move_selected_corner(s, 0.0f, -s->moveSpeed);
 }
 
@@ -65,7 +65,7 @@ void on_left(void* u)
 {
     AppState* s = (AppState*)u;
     if (!debounce_ok(&s->last_left)) return;
-    if (!s->edit_mode || s->select_mode) return;
+    if (!s->edit_mode) return;
     move_selected_corner(s, -s->moveSpeed, 0.0f);
 }
 
@@ -73,6 +73,6 @@ void on_right(void* u)
 {
     AppState* s = (AppState*)u;
     if (!debounce_ok(&s->last_right)) return;
-    if (!s->edit_mode || s->select_mode) return;
+    if (!s->edit_mode) return;
     move_selected_corner(s, s->moveSpeed, 0.0f);
 }

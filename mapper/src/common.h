@@ -27,8 +27,8 @@
 #define GRID_Y 9
 
 // MiniMAD board GPIOs (BCM)
-#define GPIO_BTN1   17  // cycle corner (EDIT+SELECT), random video (EDIT OFF)
-#define GPIO_BTN2   18  // toggle SELECT<->MOVE (EDIT ON)
+#define GPIO_BTN1   17  // cycle corner (EDIT ON), show action (EDIT OFF)
+#define GPIO_BTN2   18  // free / unused
 #define GPIO_BTN3   27  // toggle EDIT mode
 #define GPIO_UP     24
 #define GPIO_DOWN   22
