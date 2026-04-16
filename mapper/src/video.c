@@ -63,7 +63,7 @@ int video_start_with_options(Video* v, const char* filename, int loop_on_eos)
     "queue2 use-buffering=true max-size-bytes=0 max-size-buffers=0 max-size-time=5000000000 ! "
     "decodebin ! "
     "videoconvert ! "
-    "appsink name=sink sync=false max-buffers=1 drop=true",
+    "appsink name=sink sync=true max-buffers=1 drop=true",
     filename
     );
 
