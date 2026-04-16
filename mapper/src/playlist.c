@@ -21,6 +21,13 @@ static int is_video_file(const char* name)
            ends_with_ci(name, ".ts");
 }
 
+static int path_cmp(const void* a, const void* b)
+{
+    const char* const* pa = (const char* const*)a;
+    const char* const* pb = (const char* const*)b;
+    return strcmp(*pa, *pb);
+}
+
 void playlist_free(Playlist* p)
 {
     if (!p) return;
@@ -41,18 +48,13 @@ static void playlist_add(Playlist* p, const char* fullpath)
     p->items[p->count++] = strdup(fullpath);
 }
 
-int playlist_load_from_home_videos(Playlist* p, char* out_dir, size_t out_dir_sz)
+int playlist_load_from_dir(Playlist* p, const char* dir)
 {
     memset(p, 0, sizeof(*p));
 
-    const char* home = getenv("HOME");
-    if (!home) home = "/home/pi";
-
-    snprintf(out_dir, out_dir_sz, "%s/raspberryPi-video-mapper/videos", home);
-
-    DIR* d = opendir(out_dir);
+    DIR* d = opendir(dir);
     if (!d) {
-        printf("Playlist: failed to open dir: %s\n", out_dir);
+        printf("Playlist: failed to open dir: %s\n", dir);
         return 0;
     }
 
@@ -62,7 +64,7 @@ int playlist_load_from_home_videos(Playlist* p, char* out_dir, size_t out_dir_sz
         if (!is_video_file(de->d_name)) continue;
 
         char full[1024];
-        snprintf(full, sizeof(full), "%s/%s", out_dir, de->d_name);
+        snprintf(full, sizeof(full), "%s/%s", dir, de->d_name);
 
         struct stat st;
         if (stat(full, &st) == 0 && S_ISREG(st.st_mode)) {
@@ -72,15 +74,26 @@ int playlist_load_from_home_videos(Playlist* p, char* out_dir, size_t out_dir_sz
     closedir(d);
 
     if (p->count == 0) {
-        printf("Playlist: no videos found in %s\n", out_dir);
+        printf("Playlist: no videos found in %s\n", dir);
         return 0;
     }
 
-    printf("Playlist: loaded %d video(s) from %s\n", p->count, out_dir);
+    qsort(p->items, (size_t)p->count, sizeof(char*), path_cmp);
+
+    printf("Playlist: loaded %d video(s) from %s\n", p->count, dir);
     for (int i = 0; i < p->count; i++) {
         printf("  [%d] %s\n", i, p->items[i]);
     }
     return 1;
+}
+
+int playlist_load_from_home_videos(Playlist* p, char* out_dir, size_t out_dir_sz)
+{
+    const char* home = getenv("HOME");
+    if (!home) home = "/home/pi";
+
+    snprintf(out_dir, out_dir_sz, "%s/raspberryPi-video-mapper/videos", home);
+    return playlist_load_from_dir(p, out_dir);
 }
 
 const char* playlist_random(const Playlist* p, const char* avoid_path)
@@ -96,4 +109,11 @@ const char* playlist_random(const Playlist* p, const char* avoid_path)
     }
     // fallback
     return p->items[rand() % p->count];
+}
+
+const char* playlist_first(const Playlist* p)
+{
+    if (!p || p->count <= 0)
+        return NULL;
+    return p->items[0];
 }

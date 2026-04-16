@@ -13,13 +13,18 @@ typedef struct {
 
     char pending_path[1024];   // requested next
     int pending;               // request queued
+    int pending_loop_on_eos;
 } VideoEngine;
 
 void ve_init(VideoEngine* ve);
 int  ve_start_current(VideoEngine* ve, const char* path);
+int  ve_start_current_opts(VideoEngine* ve, const char* path, int loop_on_eos);
 void ve_request_transition(VideoEngine* ve, const char* path);
+void ve_request_transition_opts(VideoEngine* ve, const char* path, int loop_on_eos);
 void ve_update(VideoEngine* ve);
 void ve_shutdown(VideoEngine* ve);
+void ve_set_xfade_seconds(VideoEngine* ve, float seconds);
+int  ve_current_eos(VideoEngine* ve);
 void ve_bind_video_textures(Video* v,
                             GLint uTexY,
                             GLint uTexU,

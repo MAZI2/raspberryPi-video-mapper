@@ -41,11 +41,14 @@ static int ensure_upload_buffer(guint8** buf, size_t* cap, size_t need)
 void video_reset(Video* v)
 {
     memset(v, 0, sizeof(*v));
+    v->loop_on_eos = 1;
+    v->eos_hit = 0;
 }
 
-int video_start(Video* v, const char* filename)
+int video_start_with_options(Video* v, const char* filename, int loop_on_eos)
 {
     video_reset(v);
+    v->loop_on_eos = loop_on_eos ? 1 : 0;
     snprintf(v->path, sizeof(v->path), "%s", filename);
 
     char pipe[2048];
@@ -95,6 +98,11 @@ int video_start(Video* v, const char* filename)
     fflush(stderr);
     v->playing = 1;
     return 1;
+}
+
+int video_start(Video* v, const char* filename)
+{
+    return video_start_with_options(v, filename, 1);
 }
 
 void video_stop(Video* v)
@@ -148,8 +156,13 @@ void video_poll_bus(Video* v)
             break;
         }
         case GST_MESSAGE_EOS:
-            gst_element_seek_simple(v->pipeline, GST_FORMAT_TIME,
-                (GstSeekFlags)(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT), 0);
+            if (v->loop_on_eos) {
+                gst_element_seek_simple(v->pipeline, GST_FORMAT_TIME,
+                    (GstSeekFlags)(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT), 0);
+            } else {
+                v->eos_hit = 1;
+                v->playing = 0;
+            }
             break;
         default:
             break;
@@ -296,4 +309,12 @@ void video_update_texture(Video* v)
 
 out:
     gst_sample_unref(sample);
+}
+
+int video_consume_eos(Video* v)
+{
+    if (!v || !v->eos_hit)
+        return 0;
+    v->eos_hit = 0;
+    return 1;
 }

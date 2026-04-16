@@ -1,0 +1,9 @@
+--- a/src/project_profile.h
++++ b/src/project_profile.h
+@@ -1,4 +1,4 @@
+ #pragma once
+ 
+-#define PROJECT_PROFILE "core"
+-#define PROJECT_DISABLE_XFADE 0
++#define PROJECT_PROFILE "omahen-8ball"
++#define PROJECT_DISABLE_XFADE 1

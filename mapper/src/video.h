@@ -33,11 +33,15 @@ typedef struct {
 
     char path[1024];
     int playing;
+    int loop_on_eos;
+    int eos_hit;
 } Video;
 
 void video_reset(Video* v);
+int  video_start_with_options(Video* v, const char* filename, int loop_on_eos);
 int  video_start(Video* v, const char* filename);
 void video_stop(Video* v);
 void video_delete_textures(Video* v);
 void video_poll_bus(Video* v);
 void video_update_texture(Video* v);
+int  video_consume_eos(Video* v);

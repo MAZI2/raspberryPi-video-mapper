@@ -8,5 +8,7 @@ typedef struct {
 } Playlist;
 
 void playlist_free(Playlist* p);
+int playlist_load_from_dir(Playlist* p, const char* dir);
 int playlist_load_from_home_videos(Playlist* p, char* out_dir, size_t out_dir_sz);
 const char* playlist_random(const Playlist* p, const char* avoid_path);
+const char* playlist_first(const Playlist* p);
