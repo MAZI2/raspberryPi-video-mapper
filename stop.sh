@@ -2,8 +2,7 @@
 set -euo pipefail
 
 SERVICE_NAME="mapper_boot_mapper.service"
-PROCESS_NAME="mapping_video_keystone"
-WAIT_SECONDS=8
+WAIT_SECONDS=10
 
 run_privileged() {
   if [[ "${EUID}" -eq 0 ]]; then
@@ -20,25 +19,36 @@ run_privileged() {
   exit 1
 }
 
-service_active() {
-  run_privileged systemctl is-active --quiet "${SERVICE_NAME}"
+service_is_running() {
+  local state
+  state="$(run_privileged systemctl show -p ActiveState --value "${SERVICE_NAME}" 2>/dev/null || true)"
+  [[ "${state}" == "active" || "${state}" == "activating" || "${state}" == "deactivating" ]]
 }
 
-process_active() {
-  run_privileged pgrep -x "${PROCESS_NAME}" >/dev/null 2>&1
+mapper_pids() {
+  run_privileged pgrep -f 'mapping_video_keystone|mapper_boot_runner\.sh' 2>/dev/null || true
+}
+
+print_remaining() {
+  local pids
+  pids="$(mapper_pids)"
+  if [[ -n "${pids}" ]]; then
+    printf 'Remaining mapper-related processes:\n'
+    run_privileged ps -fp ${pids} || true
+  fi
 }
 
 printf 'Stopping %s...\n' "${SERVICE_NAME}"
 run_privileged systemctl stop --no-block "${SERVICE_NAME}" >/dev/null 2>&1 || true
-run_privileged systemctl kill --signal=SIGTERM --kill-who=all "${SERVICE_NAME}" >/dev/null 2>&1 || true
+run_privileged systemctl kill --kill-who=all --signal=SIGTERM "${SERVICE_NAME}" >/dev/null 2>&1 || true
 
-if process_active; then
-  printf 'Sending SIGTERM to %s...\n' "${PROCESS_NAME}"
-  run_privileged pkill -TERM -x "${PROCESS_NAME}" >/dev/null 2>&1 || true
+if [[ -n "$(mapper_pids)" ]]; then
+  printf 'Sending SIGTERM to mapper processes...\n'
+  run_privileged pkill -TERM -f 'mapping_video_keystone|mapper_boot_runner\.sh' >/dev/null 2>&1 || true
 fi
 
 for ((i=0; i<WAIT_SECONDS; i++)); do
-  if ! service_active && ! process_active; then
+  if ! service_is_running && [[ -z "$(mapper_pids)" ]]; then
     printf 'Mapper stopped cleanly.\n'
     run_privileged systemctl reset-failed "${SERVICE_NAME}" >/dev/null 2>&1 || true
     exit 0
@@ -46,14 +56,23 @@ for ((i=0; i<WAIT_SECONDS; i++)); do
   sleep 1
 done
 
-if process_active; then
-  printf 'Force killing %s...\n' "${PROCESS_NAME}"
-  run_privileged pkill -KILL -x "${PROCESS_NAME}" >/dev/null 2>&1 || true
+if [[ -n "$(mapper_pids)" ]]; then
+  printf 'Force killing remaining mapper processes...\n'
+  run_privileged pkill -KILL -f 'mapping_video_keystone|mapper_boot_runner\.sh' >/dev/null 2>&1 || true
 fi
 
-run_privileged systemctl kill --signal=SIGKILL --kill-who=all "${SERVICE_NAME}" >/dev/null 2>&1 || true
+run_privileged systemctl kill --kill-who=all --signal=SIGKILL "${SERVICE_NAME}" >/dev/null 2>&1 || true
 run_privileged systemctl stop --no-block "${SERVICE_NAME}" >/dev/null 2>&1 || true
 run_privileged systemctl reset-failed "${SERVICE_NAME}" >/dev/null 2>&1 || true
 
-printf 'Service state:\n'
-run_privileged systemctl status "${SERVICE_NAME}" --no-pager -l || true
+sleep 1
+
+if service_is_running || [[ -n "$(mapper_pids)" ]]; then
+  printf 'Mapper still appears to be running.\n' >&2
+  print_remaining
+  printf 'Service state:\n' >&2
+  run_privileged systemctl status "${SERVICE_NAME}" --no-pager -l || true
+  exit 1
+fi
+
+printf 'Mapper stopped after force kill.\n'
