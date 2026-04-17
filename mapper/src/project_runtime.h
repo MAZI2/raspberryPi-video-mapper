@@ -24,5 +24,4 @@ void project_runtime_after_start(ProjectRuntime* runtime, VideoEngine* ve_fg, Vi
 void project_runtime_on_action(ProjectRuntime* runtime, VideoEngine* ve_fg, VideoEngine* ve_bg);
 void project_runtime_update(ProjectRuntime* runtime, VideoEngine* ve_fg, VideoEngine* ve_bg);
 void project_runtime_maintenance(ProjectRuntime* runtime, VideoEngine* ve_fg, VideoEngine* ve_bg);
-void project_runtime_draw_overlay(ProjectRuntime* runtime, int viewport_w, int viewport_h);
 void project_runtime_shutdown(ProjectRuntime* runtime);

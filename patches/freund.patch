@@ -1,13 +1,13 @@
 --- a/src/project_profile.h	2026-04-17 11:03:04
-+++ b/src/project_profile.h	2026-04-17 12:26:13
++++ b/src/project_profile.h	2026-04-17 12:33:51
 @@ -1,3 +1,3 @@
  #pragma once
  
 -#define PROJECT_DISABLE_XFADE 0
 +#define PROJECT_DISABLE_XFADE 1
---- a/src/project_runtime.c	2026-04-17 12:24:34
-+++ b/src/project_runtime.c	2026-04-17 12:26:13
-@@ -3,16 +3,188 @@
+--- a/src/project_runtime.c	2026-04-17 12:32:17
++++ b/src/project_runtime.c	2026-04-17 12:33:51
+@@ -3,16 +3,186 @@
  #include "playlist.h"
  #include "project_support.h"
  
@@ -149,7 +149,7 @@
 +    ve_request_transition_opts(ve_fg, pair->transition_path, 0);
 +}
 +
-+static void freund_request_loop_for_active(ProjectRuntime* runtime, VideoEngine* ve_fg)
++static void freund_finish_transition_without_loop(ProjectRuntime* runtime)
 +{
 +    FreundRuntimeState* state = (FreundRuntimeState*)runtime->user;
 +    const FreundPair* pair;
@@ -166,9 +166,7 @@
 +
 +    pair = &state->pairs[idx];
 +    state->state = FREUND_STATE_LOOP;
-+
-+    printf("[FREUND] Step %d: loop -> %s\n", pair->step, pair->loop_path);
-+    ve_request_transition_opts(ve_fg, pair->loop_path, 1);
++    printf("[FREUND] Step %d: loop skipped for update test (%s)\n", pair->step, pair->loop_path);
 +}
 +
 +static void freund_prepare_next_pair(ProjectRuntime* runtime, VideoEngine* ve_fg)
@@ -200,7 +198,7 @@
      runtime->foreground_prefer_alpha = 1;
      runtime->background_prefer_alpha = 0;
      runtime->foreground_xfade_seconds = -1.0f;
-@@ -20,41 +192,61 @@
+@@ -20,41 +190,61 @@
  
  int project_runtime_prepare(ProjectRuntime* runtime, int argc, char** argv)
  {
@@ -278,7 +276,7 @@
      return 1;
  }
  
-@@ -67,34 +259,96 @@
+@@ -67,27 +257,69 @@
  
  void project_runtime_on_action(ProjectRuntime* runtime, VideoEngine* ve_fg, VideoEngine* ve_bg)
  {
@@ -320,7 +318,7 @@
 +    }
 +
 +    if (state->state == FREUND_STATE_TRANSITION) {
-+        freund_request_loop_for_active(runtime, ve_fg);
++        freund_finish_transition_without_loop(runtime);
 +    }
  }
  
@@ -338,35 +336,6 @@
 +    if (state->state == FREUND_STATE_LOOP && !ve_fg->pending && !ve_fg->transitioning) {
 +        freund_prepare_next_pair(runtime, ve_fg);
 +    }
- }
- 
- void project_runtime_draw_overlay(ProjectRuntime* runtime, int viewport_w, int viewport_h)
- {
-+    int marker_size;
-+    int pad;
-+
-     (void)runtime;
--    (void)viewport_w;
--    (void)viewport_h;
-+
-+    if (viewport_w <= 0 || viewport_h <= 0) {
-+        return;
-+    }
-+
-+    marker_size = viewport_w / 40;
-+    if (marker_size < 24) {
-+        marker_size = 24;
-+    }
-+    pad = marker_size / 3;
-+    if (pad < 8) {
-+        pad = 8;
-+    }
-+
-+    glEnable(GL_SCISSOR_TEST);
-+    glScissor(pad, viewport_h - marker_size - pad, marker_size, marker_size);
-+    glClearColor(0.10f, 1.00f, 0.20f, 1.00f);
-+    glClear(GL_COLOR_BUFFER_BIT);
-+    glDisable(GL_SCISSOR_TEST);
  }
  
  void project_runtime_shutdown(ProjectRuntime* runtime)

@@ -341,8 +341,6 @@ int main(int argc, char** argv)
             glDrawElements(GL_TRIANGLES, (GLsizei)st.numIndices, GL_UNSIGNED_SHORT, 0);
         }
 
-        project_runtime_draw_overlay(&runtime, dw, dh);
-
         SDL_GL_SwapWindow(window);
     }
 
