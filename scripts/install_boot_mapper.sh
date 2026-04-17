@@ -6,6 +6,10 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_SOURCE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+LOCAL_PROJECT_ROOT="/opt/raspberryPi-video-mapper"
+
 APT_PACKAGES=(
   build-essential
   pkg-config
@@ -35,6 +39,15 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y "${APT_PACKAGES[@]}"
 
 INSTALLED_BOOT_SCRIPT="/usr/local/bin/mapper_boot_runner.sh"
 SERVICE_PATH="/etc/systemd/system/mapper_boot_mapper.service"
+
+echo "Bootstrapping local project copy to ${LOCAL_PROJECT_ROOT}..."
+mkdir -p "${LOCAL_PROJECT_ROOT}"
+rsync -a --delete \
+  --exclude '.git/' \
+  --exclude '.cache/' \
+  --exclude 'mapper/*.o' \
+  --exclude 'mapper/mapping_video_keystone' \
+  "${PROJECT_SOURCE_ROOT}/" "${LOCAL_PROJECT_ROOT}/"
 
 cat > "${INSTALLED_BOOT_SCRIPT}" <<'EOS'
 #!/usr/bin/env bash
