@@ -9,6 +9,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_SOURCE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 LOCAL_PROJECT_ROOT="/opt/raspberryPi-video-mapper"
+LOCAL_SOURCE_DIR="${LOCAL_PROJECT_ROOT}/mapper-src"
 
 APT_PACKAGES=(
   build-essential
@@ -48,6 +49,9 @@ rsync -a --delete \
   --exclude 'mapper/*.o' \
   --exclude 'mapper/mapping_video_keystone' \
   "${PROJECT_SOURCE_ROOT}/" "${LOCAL_PROJECT_ROOT}/"
+mkdir -p "${LOCAL_SOURCE_DIR}"
+rsync -a --delete \
+  "${PROJECT_SOURCE_ROOT}/mapper/" "${LOCAL_SOURCE_DIR}/"
 
 cat > "${INSTALLED_BOOT_SCRIPT}" <<'EOS'
 #!/usr/bin/env bash
@@ -55,6 +59,7 @@ set -euo pipefail
 
 USB_RELATIVE_PATH="raspberryPi-video-mapper/mapper"
 LOCAL_PROJECT_ROOT="/opt/raspberryPi-video-mapper"
+LOCAL_SOURCE_DIR="${LOCAL_PROJECT_ROOT}/mapper-src"
 LOCAL_MAPPER_DIR="${LOCAL_PROJECT_ROOT}/mapper"
 BOOT_CONFIG_NAME="configure.conf"
 LEGACY_BOOT_CONFIG_NAME="start_on_boot.conf"
@@ -327,14 +332,20 @@ if [[ -n "${source_dir}" ]]; then
     fi
   fi
 else
-  log "No USB project found, using local copy if available"
+  if [[ -d "${LOCAL_SOURCE_DIR}" ]]; then
+    source_dir="${LOCAL_SOURCE_DIR}"
+    source_root="${LOCAL_PROJECT_ROOT}"
+    log "No USB project found, using local source copy: ${LOCAL_SOURCE_DIR}"
+  else
+    log "No USB project found, using local copy if available"
+  fi
 fi
 
 configured_project="$(get_config_value "project" "")"
 configured_patch="$(get_config_value "project_patch" "")"
 patch_file=""
 if [[ -n "${configured_project}" ]]; then
-  if [[ -n "${source_dir}" ]]; then
+  if [[ -n "${source_root}" ]]; then
     if patch_file="$(resolve_project_patch "${configured_project}" "${source_root}")"; then
       log "Project selected: ${configured_project}"
     else
@@ -342,10 +353,10 @@ if [[ -n "${configured_project}" ]]; then
       exit 1
     fi
   else
-    log "Configured project '${configured_project}' will be applied on next USB sync"
+    log "Configured project '${configured_project}' will be applied when a source copy is available"
   fi
 elif [[ -n "${configured_patch}" ]]; then
-  if [[ -n "${source_dir}" ]]; then
+  if [[ -n "${source_root}" ]]; then
     if patch_file="$(resolve_patch_path "${configured_patch}" "${source_root}")"; then
       log "Legacy project patch selected: ${configured_patch}"
     else
@@ -353,12 +364,21 @@ elif [[ -n "${configured_patch}" ]]; then
       exit 1
     fi
   else
-    log "Configured patch '${configured_patch}' will be applied on next USB sync"
+    log "Configured patch '${configured_patch}' will be applied when a source copy is available"
   fi
 fi
 
 updated=0
 if [[ -n "${source_dir}" ]]; then
+  if [[ "${source_dir}" != "${LOCAL_SOURCE_DIR}" ]]; then
+    if candidate_differs "${source_dir}" "${LOCAL_SOURCE_DIR}"; then
+      log "Updating local source copy at ${LOCAL_SOURCE_DIR}"
+      deploy_candidate "${source_dir}" "${LOCAL_SOURCE_DIR}"
+    else
+      log "Local source copy is already up to date"
+    fi
+  fi
+
   TEMP_CANDIDATE_DIR="$(mktemp -d /run/mapper-candidate.XXXXXX)"
   prepare_candidate "${source_dir}" "${TEMP_CANDIDATE_DIR}"
 
@@ -376,8 +396,13 @@ if [[ -n "${source_dir}" ]]; then
   fi
 fi
 
+if [[ ! -d "${LOCAL_SOURCE_DIR}" ]]; then
+  log "No local source copy at ${LOCAL_SOURCE_DIR}; cannot continue"
+  exit 1
+fi
+
 if [[ ! -d "${LOCAL_MAPPER_DIR}" ]]; then
-  log "No local project copy at ${LOCAL_MAPPER_DIR}; cannot continue"
+  log "No local deployed project at ${LOCAL_MAPPER_DIR}; it will be created from source on next successful sync"
   exit 1
 fi
 
