@@ -11,6 +11,16 @@ PROJECT_SOURCE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 LOCAL_PROJECT_ROOT="/opt/raspberryPi-video-mapper"
 LOCAL_SOURCE_DIR="${LOCAL_PROJECT_ROOT}/mapper-src"
 
+if [[ ! -d "${PROJECT_SOURCE_ROOT}/mapper" || ! -d "${PROJECT_SOURCE_ROOT}/patches" || ! -f "${PROJECT_SOURCE_ROOT}/configure.conf" ]]; then
+  echo "Installer source layout not found at: ${PROJECT_SOURCE_ROOT}"
+  echo "Expected at least:"
+  echo "  ${PROJECT_SOURCE_ROOT}/mapper"
+  echo "  ${PROJECT_SOURCE_ROOT}/patches"
+  echo "  ${PROJECT_SOURCE_ROOT}/configure.conf"
+  echo "Run this installer from inside the full raspberryPi-video-mapper-main checkout."
+  exit 1
+fi
+
 APT_PACKAGES=(
   build-essential
   pkg-config
