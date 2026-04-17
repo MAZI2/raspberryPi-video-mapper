@@ -112,7 +112,7 @@ find_source_dir() {
   local device type transport mount_point scan_mount candidate temp_mount part_label
 
   while read -r device type transport mount_point; do
-    [[ "${type}" == "part" && "${transport}" == "usb" ]] || continue
+    [[ "${type}" == "part" ]] || continue
 
     if [[ -n "${CONFIGURED_USB_LABEL}" ]]; then
       part_label="$(lsblk -no LABEL "${device}" 2>/dev/null | head -n1 | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
