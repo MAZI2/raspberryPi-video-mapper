@@ -6,6 +6,33 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
+APT_PACKAGES=(
+  build-essential
+  pkg-config
+  libsdl2-dev
+  libgpiod-dev
+  gpiod
+  libgles2-mesa-dev
+  libgstreamer-plugins-base1.0-dev
+  libgstreamer1.0-dev
+  gstreamer1.0-tools
+  gstreamer1.0-plugins-base
+  gstreamer1.0-plugins-base-apps
+  gstreamer1.0-plugins-good
+  gstreamer1.0-plugins-bad
+  gstreamer1.0-plugins-ugly
+  gstreamer1.0-libav
+  git
+  patch
+  rsync
+)
+
+echo "Updating apt package index..."
+apt-get update
+
+echo "Installing/verifying mapper dependencies..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y "${APT_PACKAGES[@]}"
+
 INSTALLED_BOOT_SCRIPT="/usr/local/bin/mapper_boot_runner.sh"
 SERVICE_PATH="/etc/systemd/system/mapper_boot_mapper.service"
 
