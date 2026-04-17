@@ -29,16 +29,26 @@ get_config_value() {
   printf '%s\n' "${value}"
 }
 
+get_mapper_folder_name() {
+  get_config_value "mapper_folder_name" "raspberryPi-video-mapper-main"
+}
+
+get_videos_path() {
+  get_config_value "videos_path" "videos"
+}
+
 find_videos_under_root() {
   local root="$1"
+  local mapper_folder_name="$2"
+  local videos_path="$3"
 
-  if [[ -d "$root/videos" ]]; then
-    printf '%s\n' "$root/videos"
+  if [[ -n "$videos_path" && -d "$root/$videos_path" ]]; then
+    printf '%s\n' "$root/$videos_path"
     return 0
   fi
 
-  if [[ -d "$root/raspberryPi-video-mapper/videos" ]]; then
-    printf '%s\n' "$root/raspberryPi-video-mapper/videos"
+  if [[ -n "$mapper_folder_name" && -n "$videos_path" && -d "$root/$mapper_folder_name/$videos_path" ]]; then
+    printf '%s\n' "$root/$mapper_folder_name/$videos_path"
     return 0
   fi
 
@@ -60,6 +70,8 @@ find_mount_for_device() {
 
 resolve_usb_videos_root() {
   local label="$1"
+  local mapper_folder_name="$2"
+  local videos_path="$3"
   local device=""
   local mount_point=""
   local mount_name=""
@@ -80,7 +92,7 @@ resolve_usb_videos_root() {
   fi
 
   [[ -n "$mount_point" ]] || return 1
-  find_videos_under_root "$mount_point"
+  find_videos_under_root "$mount_point" "$mapper_folder_name" "$videos_path"
 }
 
 sync_video_cache() {
@@ -118,6 +130,8 @@ sync_video_cache() {
 PROJECT_NAME="$(get_config_value "project" "")"
 LEGACY_PATCH="$(get_config_value "project_patch" "")"
 USB_LABEL="$(get_config_value "usb_label" "")"
+MAPPER_FOLDER_NAME="$(get_mapper_folder_name)"
+VIDEOS_PATH="$(get_videos_path)"
 VIDEO_CACHE_DIR="$PWD/.cache/videos"
 VIDEO_SOURCE_DIR=""
 MEDIA_ROOT=""
@@ -130,7 +144,7 @@ elif [[ -n "$LEGACY_PATCH" ]]; then
 fi
 
 if [[ -n "$USB_LABEL" ]]; then
-  VIDEO_SOURCE_DIR="$(resolve_usb_videos_root "$USB_LABEL" || true)"
+  VIDEO_SOURCE_DIR="$(resolve_usb_videos_root "$USB_LABEL" "$MAPPER_FOLDER_NAME" "$VIDEOS_PATH" || true)"
 fi
 
 if [[ -n "$VIDEO_SOURCE_DIR" ]]; then
@@ -160,10 +174,10 @@ fi
   cd "$BUILD_DIR"
   make -j
   if [[ -n "${MEDIA_ROOT}" ]]; then
-    SDL_VIDEODRIVER=kmsdrm MAPPER_MEDIA_ROOT="${MEDIA_ROOT}" ./mapping_video_keystone
+    SDL_VIDEODRIVER=kmsdrm MAPPER_MEDIA_ROOT="${MEDIA_ROOT}" MAPPER_FOLDER_NAME="${MAPPER_FOLDER_NAME}" MAPPER_VIDEOS_PATH="${VIDEOS_PATH}" ./mapping_video_keystone
   elif [[ -n "${USB_LABEL}" ]]; then
-    SDL_VIDEODRIVER=kmsdrm MAPPER_USB_LABEL="${USB_LABEL}" ./mapping_video_keystone
+    SDL_VIDEODRIVER=kmsdrm MAPPER_USB_LABEL="${USB_LABEL}" MAPPER_FOLDER_NAME="${MAPPER_FOLDER_NAME}" MAPPER_VIDEOS_PATH="${VIDEOS_PATH}" ./mapping_video_keystone
   else
-    SDL_VIDEODRIVER=kmsdrm ./mapping_video_keystone
+    SDL_VIDEODRIVER=kmsdrm MAPPER_FOLDER_NAME="${MAPPER_FOLDER_NAME}" MAPPER_VIDEOS_PATH="${VIDEOS_PATH}" ./mapping_video_keystone
   fi
 )

@@ -90,9 +90,17 @@ int playlist_load_from_dir(Playlist* p, const char* dir)
 int playlist_load_from_home_videos(Playlist* p, char* out_dir, size_t out_dir_sz)
 {
     const char* home = getenv("HOME");
+    const char* mapper_folder_name = getenv("MAPPER_FOLDER_NAME");
+    const char* videos_path = getenv("MAPPER_VIDEOS_PATH");
     if (!home) home = "/home/pi";
+    if (!mapper_folder_name || !mapper_folder_name[0]) {
+        mapper_folder_name = "raspberryPi-video-mapper-main";
+    }
+    if (!videos_path || !videos_path[0]) {
+        videos_path = "videos";
+    }
 
-    snprintf(out_dir, out_dir_sz, "%s/raspberryPi-video-mapper/videos", home);
+    snprintf(out_dir, out_dir_sz, "%s/%s/%s", home, mapper_folder_name, videos_path);
     return playlist_load_from_dir(p, out_dir);
 }
 

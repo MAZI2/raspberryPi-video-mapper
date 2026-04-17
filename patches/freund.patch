@@ -1,13 +1,13 @@
---- a/src/project_profile.h	2026-04-17 11:03:04
-+++ b/src/project_profile.h	2026-04-17 12:33:51
+--- a/src/project_profile.h
++++ b/src/project_profile.h
 @@ -1,3 +1,3 @@
  #pragma once
  
 -#define PROJECT_DISABLE_XFADE 0
 +#define PROJECT_DISABLE_XFADE 1
---- a/src/project_runtime.c	2026-04-17 12:32:17
-+++ b/src/project_runtime.c	2026-04-17 12:33:51
-@@ -3,16 +3,186 @@
+--- a/src/project_runtime.c
++++ b/src/project_runtime.c
+@@ -3,16 +3,187 @@
  #include "playlist.h"
  #include "project_support.h"
  
@@ -149,7 +149,7 @@
 +    ve_request_transition_opts(ve_fg, pair->transition_path, 0);
 +}
 +
-+static void freund_finish_transition_without_loop(ProjectRuntime* runtime)
++static void freund_request_loop_for_active(ProjectRuntime* runtime, VideoEngine* ve_fg)
 +{
 +    FreundRuntimeState* state = (FreundRuntimeState*)runtime->user;
 +    const FreundPair* pair;
@@ -166,7 +166,8 @@
 +
 +    pair = &state->pairs[idx];
 +    state->state = FREUND_STATE_LOOP;
-+    printf("[FREUND] Step %d: loop skipped for update test (%s)\n", pair->step, pair->loop_path);
++    printf("[FREUND] Step %d: loop -> %s\n", pair->step, pair->loop_path);
++    ve_request_transition_opts(ve_fg, pair->loop_path, 1);
 +}
 +
 +static void freund_prepare_next_pair(ProjectRuntime* runtime, VideoEngine* ve_fg)
@@ -198,7 +199,7 @@
      runtime->foreground_prefer_alpha = 1;
      runtime->background_prefer_alpha = 0;
      runtime->foreground_xfade_seconds = -1.0f;
-@@ -20,41 +190,61 @@
+@@ -20,41 +191,61 @@
  
  int project_runtime_prepare(ProjectRuntime* runtime, int argc, char** argv)
  {
@@ -276,7 +277,7 @@
      return 1;
  }
  
-@@ -67,27 +257,69 @@
+@@ -67,27 +258,69 @@
  
  void project_runtime_on_action(ProjectRuntime* runtime, VideoEngine* ve_fg, VideoEngine* ve_bg)
  {
@@ -318,7 +319,7 @@
 +    }
 +
 +    if (state->state == FREUND_STATE_TRANSITION) {
-+        freund_finish_transition_without_loop(runtime);
++        freund_request_loop_for_active(runtime, ve_fg);
 +    }
  }
  

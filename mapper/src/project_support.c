@@ -7,6 +7,24 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+static const char* mapper_folder_name(void)
+{
+    const char* name = getenv("MAPPER_FOLDER_NAME");
+    if (name && name[0]) {
+        return name;
+    }
+    return "raspberryPi-video-mapper-main";
+}
+
+static const char* mapper_videos_path(void)
+{
+    const char* path = getenv("MAPPER_VIDEOS_PATH");
+    if (path && path[0]) {
+        return path;
+    }
+    return "videos";
+}
+
 const char* mapper_path_basename(const char* path)
 {
     const char* slash = strrchr(path, '/');
@@ -22,14 +40,16 @@ int mapper_path_is_dir(const char* path)
 int mapper_find_videos_under_root(const char* root, char* out, size_t out_sz)
 {
     char candidate[1024];
+    const char* folder_name = mapper_folder_name();
+    const char* videos_path = mapper_videos_path();
 
-    snprintf(candidate, sizeof(candidate), "%s/videos", root);
+    snprintf(candidate, sizeof(candidate), "%s/%s", root, videos_path);
     if (mapper_path_is_dir(candidate)) {
         snprintf(out, out_sz, "%s", candidate);
         return 1;
     }
 
-    snprintf(candidate, sizeof(candidate), "%s/raspberryPi-video-mapper/videos", root);
+    snprintf(candidate, sizeof(candidate), "%s/%s/%s", root, folder_name, videos_path);
     if (mapper_path_is_dir(candidate)) {
         snprintf(out, out_sz, "%s", candidate);
         return 1;

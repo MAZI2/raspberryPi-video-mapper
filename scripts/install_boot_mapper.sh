@@ -57,7 +57,6 @@ cat > "${INSTALLED_BOOT_SCRIPT}" <<'EOS'
 #!/usr/bin/env bash
 set -euo pipefail
 
-USB_RELATIVE_PATH="raspberryPi-video-mapper/mapper"
 LOCAL_PROJECT_ROOT="/opt/raspberryPi-video-mapper"
 LOCAL_SOURCE_DIR="${LOCAL_PROJECT_ROOT}/mapper-src"
 LOCAL_MAPPER_DIR="${LOCAL_PROJECT_ROOT}/mapper"
@@ -302,9 +301,15 @@ deploy_candidate() {
 mkdir -p "${LOCAL_PROJECT_ROOT}" "${TEMP_MOUNT_BASE}"
 
 CONFIGURED_USB_LABEL="$(get_config_value "usb_label" "")"
+CONFIGURED_MAPPER_FOLDER_NAME="$(get_config_value "mapper_folder_name" "raspberryPi-video-mapper-main")"
+CONFIGURED_VIDEOS_PATH="$(get_config_value "videos_path" "videos")"
+USB_RELATIVE_PATH="${CONFIGURED_MAPPER_FOLDER_NAME}/mapper"
+
 if [[ -n "${CONFIGURED_USB_LABEL}" ]]; then
   log "Using configured USB label filter: ${CONFIGURED_USB_LABEL}"
 fi
+log "Using configured mapper folder name: ${CONFIGURED_MAPPER_FOLDER_NAME}"
+log "Using configured videos path: ${CONFIGURED_VIDEOS_PATH}"
 
 log "Searching USB drives for ${USB_RELATIVE_PATH}"
 source_dir=""
@@ -423,9 +428,9 @@ log "Launching ${BINARY_NAME}"
 (
   cd "${LOCAL_MAPPER_DIR}"
   if [[ -n "${CONFIGURED_USB_LABEL}" ]]; then
-    SDL_VIDEODRIVER=kmsdrm MAPPER_USB_LABEL="${CONFIGURED_USB_LABEL}" "./${BINARY_NAME}"
+    SDL_VIDEODRIVER=kmsdrm MAPPER_USB_LABEL="${CONFIGURED_USB_LABEL}" MAPPER_FOLDER_NAME="${CONFIGURED_MAPPER_FOLDER_NAME}" MAPPER_VIDEOS_PATH="${CONFIGURED_VIDEOS_PATH}" "./${BINARY_NAME}"
   else
-    SDL_VIDEODRIVER=kmsdrm "./${BINARY_NAME}"
+    SDL_VIDEODRIVER=kmsdrm MAPPER_FOLDER_NAME="${CONFIGURED_MAPPER_FOLDER_NAME}" MAPPER_VIDEOS_PATH="${CONFIGURED_VIDEOS_PATH}" "./${BINARY_NAME}"
   fi
 )
 app_rc=$?
