@@ -1,12 +1,12 @@
 --- a/src/project_profile.h	2026-04-17 11:03:04
-+++ b/src/project_profile.h	2026-04-17 11:04:39
++++ b/src/project_profile.h	2026-04-17 12:26:13
 @@ -1,3 +1,3 @@
  #pragma once
  
 -#define PROJECT_DISABLE_XFADE 0
 +#define PROJECT_DISABLE_XFADE 1
---- a/src/project_runtime.c	2026-04-17 11:03:04
-+++ b/src/project_runtime.c	2026-04-17 11:04:39
+--- a/src/project_runtime.c	2026-04-17 12:24:34
++++ b/src/project_runtime.c	2026-04-17 12:26:13
 @@ -3,16 +3,188 @@
  #include "playlist.h"
  #include "project_support.h"
@@ -278,7 +278,7 @@
      return 1;
  }
  
-@@ -67,27 +259,69 @@
+@@ -67,34 +259,96 @@
  
  void project_runtime_on_action(ProjectRuntime* runtime, VideoEngine* ve_fg, VideoEngine* ve_bg)
  {
@@ -338,6 +338,35 @@
 +    if (state->state == FREUND_STATE_LOOP && !ve_fg->pending && !ve_fg->transitioning) {
 +        freund_prepare_next_pair(runtime, ve_fg);
 +    }
+ }
+ 
+ void project_runtime_draw_overlay(ProjectRuntime* runtime, int viewport_w, int viewport_h)
+ {
++    int marker_size;
++    int pad;
++
+     (void)runtime;
+-    (void)viewport_w;
+-    (void)viewport_h;
++
++    if (viewport_w <= 0 || viewport_h <= 0) {
++        return;
++    }
++
++    marker_size = viewport_w / 40;
++    if (marker_size < 24) {
++        marker_size = 24;
++    }
++    pad = marker_size / 3;
++    if (pad < 8) {
++        pad = 8;
++    }
++
++    glEnable(GL_SCISSOR_TEST);
++    glScissor(pad, viewport_h - marker_size - pad, marker_size, marker_size);
++    glClearColor(0.10f, 1.00f, 0.20f, 1.00f);
++    glClear(GL_COLOR_BUFFER_BIT);
++    glDisable(GL_SCISSOR_TEST);
  }
  
  void project_runtime_shutdown(ProjectRuntime* runtime)

@@ -87,6 +87,13 @@ void project_runtime_maintenance(ProjectRuntime* runtime, VideoEngine* ve_fg, Vi
     (void)ve_bg;
 }
 
+void project_runtime_draw_overlay(ProjectRuntime* runtime, int viewport_w, int viewport_h)
+{
+    (void)runtime;
+    (void)viewport_w;
+    (void)viewport_h;
+}
+
 void project_runtime_shutdown(ProjectRuntime* runtime)
 {
     (void)runtime;
