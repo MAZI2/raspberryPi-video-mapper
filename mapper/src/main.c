@@ -2,8 +2,8 @@
 #include "app_state.h"
 #include "gpio_helpers.h"
 #include "input_actions.h"
-#include "playlist.h"
 #include "project_profile.h"
+#include "project_runtime.h"
 #include "shaders.h"
 #include "video_engine.h"
 
@@ -11,72 +11,16 @@
 #include <GLES2/gl2.h>
 #include <gst/gst.h>
 
-#include <ctype.h>
-#include <errno.h>
-#include <limits.h>
-#include <mntent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
-#include <strings.h>
-#include <sys/wait.h>
 #include <time.h>
-#include <unistd.h>
-
-typedef enum {
-    MODE_CORE_RANDOM = 0,
-    MODE_FREUND = 1,
-    MODE_OMAHEN_8BALL = 2
-} ProjectMode;
-
-typedef enum {
-    FREUND_STATE_BACKGROUND = 0,
-    FREUND_STATE_TRANSITION = 1,
-    FREUND_STATE_LOOP = 2
-} FreundState;
-
-typedef enum {
-    OMAHEN_STATE_IDLE = 0,
-    OMAHEN_STATE_TRANSITION = 1,
-    OMAHEN_STATE_ANSWER = 2
-} OmahenState;
-
-typedef struct {
-    int step;
-    const char* transition_path;
-    const char* loop_path;
-} FreundPair;
-
-typedef struct {
-    Playlist background;
-    Playlist loops;
-    Playlist transitions;
-    FreundPair* pairs;
-    int pair_count;
-    int active_pair_idx;
-    FreundState state;
-} FreundShow;
-
-typedef struct {
-    Playlist idle;
-    Playlist transitions;
-    Playlist answers;
-    OmahenState state;
-    char pending_answer[1024];
-} OmahenShow;
-
-typedef struct {
-    ProjectMode mode;
-    char media_root[1024];
-    Playlist core_playlist;
-    FreundShow freund;
-    OmahenShow omahen;
-} ShowContext;
 
 typedef struct {
     AppState* st;
-    ShowContext* show;
-    VideoEngine* ve;
+    ProjectRuntime* runtime;
+    VideoEngine* ve_fg;
+    VideoEngine* ve_bg;
 } Btn1Context;
 
 static void gl_check(const char* where)
@@ -85,620 +29,6 @@ static void gl_check(const char* where)
     if (e != GL_NO_ERROR) {
         fprintf(stderr, "[GL] error 0x%x at %s\n", (unsigned)e, where);
         fflush(stderr);
-    }
-}
-
-static const char* path_basename(const char* path)
-{
-    const char* slash = strrchr(path, '/');
-    return slash ? (slash + 1) : path;
-}
-
-static int path_is_dir(const char* path)
-{
-    struct stat st;
-    return (path && stat(path, &st) == 0 && S_ISDIR(st.st_mode));
-}
-
-static int find_videos_under_root(const char* root, char* out, size_t out_sz)
-{
-    char candidate[1024];
-
-    snprintf(candidate, sizeof(candidate), "%s/videos", root);
-    if (path_is_dir(candidate)) {
-        snprintf(out, out_sz, "%s", candidate);
-        return 1;
-    }
-
-    snprintf(candidate, sizeof(candidate), "%s/raspberryPi-video-mapper/videos", root);
-    if (path_is_dir(candidate)) {
-        snprintf(out, out_sz, "%s", candidate);
-        return 1;
-    }
-
-    return 0;
-}
-
-static int resolve_usb_label_device(const char* label, char* out_dev, size_t out_dev_sz)
-{
-    char by_label[1024];
-    char resolved[PATH_MAX];
-
-    if (!label || !label[0]) {
-        return 0;
-    }
-
-    snprintf(by_label, sizeof(by_label), "/dev/disk/by-label/%s", label);
-    if (!realpath(by_label, resolved)) {
-        return 0;
-    }
-
-    snprintf(out_dev, out_dev_sz, "%s", resolved);
-    return 1;
-}
-
-static int fs_source_matches_device(const char* fs_source, const char* wanted_dev)
-{
-    char resolved[PATH_MAX];
-
-    if (!wanted_dev || !wanted_dev[0]) {
-        return 1;
-    }
-
-    if (strcmp(fs_source, wanted_dev) == 0) {
-        return 1;
-    }
-
-    if (realpath(fs_source, resolved) && strcmp(resolved, wanted_dev) == 0) {
-        return 1;
-    }
-
-    return 0;
-}
-
-static int run_cmd_wait(char* const argv[])
-{
-    pid_t pid = fork();
-    if (pid < 0) {
-        return 0;
-    }
-
-    if (pid == 0) {
-        execvp(argv[0], argv);
-        _exit(127);
-    }
-
-    int status = 0;
-    if (waitpid(pid, &status, 0) < 0) {
-        return 0;
-    }
-
-    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
-}
-
-static int find_mount_for_device(const char* wanted_dev, char* out_mount, size_t out_mount_sz)
-{
-    FILE* mounts = setmntent("/proc/mounts", "r");
-    if (!mounts) {
-        return 0;
-    }
-
-    int found = 0;
-    struct mntent* ent;
-    while ((ent = getmntent(mounts)) != NULL) {
-        if (fs_source_matches_device(ent->mnt_fsname, wanted_dev)) {
-            snprintf(out_mount, out_mount_sz, "%s", ent->mnt_dir);
-            found = 1;
-            break;
-        }
-    }
-
-    endmntent(mounts);
-    return found;
-}
-
-static int ensure_device_mounted(const char* wanted_dev, char* out_mount, size_t out_mount_sz)
-{
-    if (!wanted_dev || !wanted_dev[0]) {
-        return 0;
-    }
-
-    if (find_mount_for_device(wanted_dev, out_mount, out_mount_sz)) {
-        return 1;
-    }
-
-    if (mkdir("/run/mapper-usb", 0755) != 0 && errno != EEXIST) {
-        return 0;
-    }
-
-    const char* base = strrchr(wanted_dev, '/');
-    base = base ? (base + 1) : wanted_dev;
-
-    char mount_point[1024];
-    snprintf(mount_point, sizeof(mount_point), "/run/mapper-usb/%s", base);
-    if (mkdir(mount_point, 0755) != 0 && errno != EEXIST) {
-        return 0;
-    }
-
-    char* cmd1[] = { "mount", (char*)wanted_dev, mount_point, NULL };
-    if (!run_cmd_wait(cmd1)) {
-        char* cmd2[] = { "mount", "-o", "ro", (char*)wanted_dev, mount_point, NULL };
-        if (!run_cmd_wait(cmd2)) {
-            return 0;
-        }
-    }
-
-    return find_mount_for_device(wanted_dev, out_mount, out_mount_sz);
-}
-
-static int parse_step_prefix(const char* path, int* out_step)
-{
-    const char* name = path_basename(path);
-    if (!name || !isdigit((unsigned char)name[0])) {
-        return 0;
-    }
-
-    long value = 0;
-    int i = 0;
-    while (name[i] && isdigit((unsigned char)name[i])) {
-        value = (value * 10) + (name[i] - '0');
-        if (value > 1000000) {
-            return 0;
-        }
-        i++;
-    }
-
-    if (name[i] != '-') {
-        return 0;
-    }
-
-    *out_step = (int)value;
-    return 1;
-}
-
-static int freund_pair_cmp(const void* a, const void* b)
-{
-    const FreundPair* pa = (const FreundPair*)a;
-    const FreundPair* pb = (const FreundPair*)b;
-    return pa->step - pb->step;
-}
-
-static ProjectMode project_mode_from_profile(void)
-{
-    if (strcasecmp(PROJECT_PROFILE, "freund") == 0) {
-        return MODE_FREUND;
-    }
-    if (strcasecmp(PROJECT_PROFILE, "omahen") == 0 ||
-        strcasecmp(PROJECT_PROFILE, "omahen-8ball") == 0 ||
-        strcasecmp(PROJECT_PROFILE, "8ball") == 0) {
-        return MODE_OMAHEN_8BALL;
-    }
-    return MODE_CORE_RANDOM;
-}
-
-static const char* project_mode_name(ProjectMode mode)
-{
-    switch (mode) {
-    case MODE_FREUND: return "freund";
-    case MODE_OMAHEN_8BALL: return "omahen-8ball";
-    default: return "core";
-    }
-}
-
-static int detect_media_root(char* out, size_t out_sz)
-{
-    const char* env_root = getenv("MAPPER_MEDIA_ROOT");
-    const char* usb_label = getenv("MAPPER_USB_LABEL");
-    char wanted_usb_dev[PATH_MAX];
-    char mounted_dir[1024];
-    wanted_usb_dev[0] = '\0';
-    mounted_dir[0] = '\0';
-
-    if (env_root && env_root[0] && path_is_dir(env_root)) {
-        snprintf(out, out_sz, "%s", env_root);
-        return 1;
-    }
-
-    if (usb_label && usb_label[0]) {
-        if (resolve_usb_label_device(usb_label, wanted_usb_dev, sizeof(wanted_usb_dev))) {
-            printf("[MEDIA] USB label filter: %s -> %s\n", usb_label, wanted_usb_dev);
-            if (ensure_device_mounted(wanted_usb_dev, mounted_dir, sizeof(mounted_dir))) {
-                printf("[MEDIA] USB mounted at: %s\n", mounted_dir);
-                if (find_videos_under_root(mounted_dir, out, out_sz)) {
-                    return 1;
-                }
-            } else {
-                printf("[MEDIA] Failed to auto-mount %s (need root privileges?)\n", wanted_usb_dev);
-            }
-        } else {
-            printf("[MEDIA] USB label '%s' is not currently resolvable\n", usb_label);
-        }
-    }
-
-    FILE* mounts = setmntent("/proc/mounts", "r");
-    if (mounts) {
-        struct mntent* ent;
-        while ((ent = getmntent(mounts)) != NULL) {
-            if (wanted_usb_dev[0] && !fs_source_matches_device(ent->mnt_fsname, wanted_usb_dev)) {
-                continue;
-            }
-            if (find_videos_under_root(ent->mnt_dir, out, out_sz)) {
-                endmntent(mounts);
-                return 1;
-            }
-        }
-        endmntent(mounts);
-    }
-
-    const char* home = getenv("HOME");
-    if (!home) {
-        home = "/home/pi";
-    }
-
-    char candidate[1024];
-
-    snprintf(candidate, sizeof(candidate), "%s", home);
-    if (find_videos_under_root(candidate, out, out_sz)) {
-        return 1;
-    }
-
-    snprintf(candidate, sizeof(candidate), "%s", "/opt/raspberryPi-video-mapper");
-    if (find_videos_under_root(candidate, out, out_sz)) {
-        return 1;
-    }
-
-    out[0] = '\0';
-    return 0;
-}
-
-static int load_playlist_from_subdir(Playlist* p, const char* media_root, const char* subdir)
-{
-    char full[1024];
-    snprintf(full, sizeof(full), "%s/%s", media_root, subdir);
-    return playlist_load_from_dir(p, full);
-}
-
-static void show_context_init(ShowContext* show)
-{
-    memset(show, 0, sizeof(*show));
-    show->mode = project_mode_from_profile();
-}
-
-static void show_context_free(ShowContext* show)
-{
-    playlist_free(&show->core_playlist);
-
-    playlist_free(&show->freund.background);
-    playlist_free(&show->freund.loops);
-    playlist_free(&show->freund.transitions);
-    free(show->freund.pairs);
-    show->freund.pairs = NULL;
-
-    playlist_free(&show->omahen.idle);
-    playlist_free(&show->omahen.transitions);
-    playlist_free(&show->omahen.answers);
-}
-
-static int freund_find_loop_for_step(const Playlist* loops, int step, const char** out_path)
-{
-    for (int i = 0; i < loops->count; i++) {
-        int loop_step = 0;
-        if (parse_step_prefix(loops->items[i], &loop_step) && loop_step == step) {
-            *out_path = loops->items[i];
-            return 1;
-        }
-    }
-    return 0;
-}
-
-static int freund_build_pairs(FreundShow* freund)
-{
-    if (freund->transitions.count <= 0 || freund->loops.count <= 0) {
-        return 0;
-    }
-
-    FreundPair* pairs = (FreundPair*)calloc((size_t)freund->transitions.count, sizeof(FreundPair));
-    if (!pairs) {
-        return 0;
-    }
-
-    int count = 0;
-    for (int i = 0; i < freund->transitions.count; i++) {
-        int step = 0;
-        const char* loop_path = NULL;
-        if (!parse_step_prefix(freund->transitions.items[i], &step)) {
-            continue;
-        }
-        if (!freund_find_loop_for_step(&freund->loops, step, &loop_path)) {
-            continue;
-        }
-
-        pairs[count].step = step;
-        pairs[count].transition_path = freund->transitions.items[i];
-        pairs[count].loop_path = loop_path;
-        count++;
-    }
-
-    if (count <= 0) {
-        free(pairs);
-        return 0;
-    }
-
-    qsort(pairs, (size_t)count, sizeof(FreundPair), freund_pair_cmp);
-
-    freund->pairs = pairs;
-    freund->pair_count = count;
-    freund->active_pair_idx = -1;
-    freund->state = FREUND_STATE_BACKGROUND;
-    return 1;
-}
-
-static int show_prepare_freund(ShowContext* show, const char** initial_video, int* initial_loop)
-{
-    if (!load_playlist_from_subdir(&show->freund.background, show->media_root, "freund/BACKGROUND")) {
-        fprintf(stderr, "[FREUND] Missing videos in freund/BACKGROUND\n");
-        return 0;
-    }
-    if (!load_playlist_from_subdir(&show->freund.loops, show->media_root, "freund/LOOP")) {
-        fprintf(stderr, "[FREUND] Missing videos in freund/LOOP\n");
-        return 0;
-    }
-    if (!load_playlist_from_subdir(&show->freund.transitions, show->media_root, "freund/TRANSITION")) {
-        fprintf(stderr, "[FREUND] Missing videos in freund/TRANSITION\n");
-        return 0;
-    }
-    if (!freund_build_pairs(&show->freund)) {
-        fprintf(stderr, "[FREUND] No usable transition/loop pairs (n-*.mp4) found\n");
-        return 0;
-    }
-
-    show->freund.active_pair_idx = 0;
-    show->freund.state = FREUND_STATE_TRANSITION;
-    *initial_video = show->freund.pairs[0].transition_path;
-    *initial_loop = 0;
-
-    printf("[FREUND] Loaded %d pair(s), background=%s, initial transition=%s\n",
-           show->freund.pair_count,
-           playlist_first(&show->freund.background) ? playlist_first(&show->freund.background) : "(null)",
-           *initial_video ? *initial_video : "(null)");
-    return (*initial_video != NULL);
-}
-
-static int show_prepare_omahen(ShowContext* show, const char** initial_video, int* initial_loop)
-{
-    if (!load_playlist_from_subdir(&show->omahen.idle, show->media_root, "omahen/IDLE")) {
-        fprintf(stderr, "[OMAHEN] Missing videos in omahen/IDLE\n");
-        return 0;
-    }
-    if (!load_playlist_from_subdir(&show->omahen.transitions, show->media_root, "omahen/TRANSITION")) {
-        fprintf(stderr, "[OMAHEN] Missing videos in omahen/TRANSITION\n");
-        return 0;
-    }
-    if (!load_playlist_from_subdir(&show->omahen.answers, show->media_root, "omahen/ANSWER")) {
-        fprintf(stderr, "[OMAHEN] Missing videos in omahen/ANSWER\n");
-        return 0;
-    }
-
-    *initial_video = playlist_first(&show->omahen.idle);
-    *initial_loop = 1;
-    show->omahen.state = OMAHEN_STATE_IDLE;
-    show->omahen.pending_answer[0] = '\0';
-
-    printf("[OMAHEN] Loaded idle=%d transition=%d answer=%d\n",
-           show->omahen.idle.count,
-           show->omahen.transitions.count,
-           show->omahen.answers.count);
-    return (*initial_video != NULL);
-}
-
-static int show_prepare_core_random(ShowContext* show, int argc, char** argv, const char** initial_video, int* initial_loop)
-{
-    if (argc >= 2 && argv[1] && argv[1][0]) {
-        *initial_video = argv[1];
-        *initial_loop = 1;
-    }
-
-    if (show->media_root[0]) {
-        (void)playlist_load_from_dir(&show->core_playlist, show->media_root);
-    }
-
-    if (!*initial_video) {
-        *initial_video = playlist_first(&show->core_playlist);
-        *initial_loop = 1;
-    }
-
-    if (!*initial_video) {
-        fprintf(stderr, "[CORE] No initial video provided and no videos found in media root\n");
-        return 0;
-    }
-
-    return 1;
-}
-
-static int show_prepare(ShowContext* show, int argc, char** argv, const char** initial_video, int* initial_loop)
-{
-    *initial_video = NULL;
-    *initial_loop = 1;
-
-    (void)detect_media_root(show->media_root, sizeof(show->media_root));
-
-    if (show->media_root[0]) {
-        printf("[MEDIA] root=%s\n", show->media_root);
-    } else {
-        printf("[MEDIA] root not found\n");
-    }
-
-    switch (show->mode) {
-    case MODE_FREUND:
-        if (!show->media_root[0]) {
-            fprintf(stderr, "[FREUND] MAPPER_MEDIA_ROOT (or fallback videos path) is required\n");
-            return 0;
-        }
-        return show_prepare_freund(show, initial_video, initial_loop);
-
-    case MODE_OMAHEN_8BALL:
-        if (!show->media_root[0]) {
-            fprintf(stderr, "[OMAHEN] MAPPER_MEDIA_ROOT (or fallback videos path) is required\n");
-            return 0;
-        }
-        return show_prepare_omahen(show, initial_video, initial_loop);
-
-    case MODE_CORE_RANDOM:
-    default:
-        return show_prepare_core_random(show, argc, argv, initial_video, initial_loop);
-    }
-}
-
-static void freund_request_pair(ShowContext* show, VideoEngine* ve, int pair_idx)
-{
-    if (pair_idx < 0 || pair_idx >= show->freund.pair_count) {
-        return;
-    }
-
-    show->freund.active_pair_idx = pair_idx;
-    show->freund.state = FREUND_STATE_TRANSITION;
-
-    const FreundPair* pair = &show->freund.pairs[pair_idx];
-    printf("[FREUND] Step %d: transition -> %s\n", pair->step, pair->transition_path);
-    ve_request_transition_opts(ve, pair->transition_path, 0);
-}
-
-static void freund_request_loop_for_active(ShowContext* show, VideoEngine* ve)
-{
-    int idx = show->freund.active_pair_idx;
-    if (idx < 0 || idx >= show->freund.pair_count) {
-        return;
-    }
-
-    const FreundPair* pair = &show->freund.pairs[idx];
-    show->freund.state = FREUND_STATE_LOOP;
-
-    printf("[FREUND] Step %d: loop -> %s\n", pair->step, pair->loop_path);
-    ve_request_transition_opts(ve, pair->loop_path, 1);
-}
-
-static void freund_prepare_next_pair(ShowContext* show, VideoEngine* ve)
-{
-    int next_idx;
-    const FreundPair* pair;
-
-    if (!show || !ve || show->freund.pair_count <= 1)
-        return;
-    if (show->freund.active_pair_idx < 0 || show->freund.active_pair_idx >= show->freund.pair_count)
-        return;
-
-    next_idx = (show->freund.active_pair_idx + 1) % show->freund.pair_count;
-    pair = &show->freund.pairs[next_idx];
-    ve_prepare_transition_opts(ve, pair->transition_path, 0);
-}
-
-static void show_after_start(ShowContext* show, VideoEngine* ve)
-{
-    (void)show;
-    (void)ve;
-}
-
-static void show_on_btn1_non_edit(ShowContext* show, VideoEngine* ve)
-{
-    if (show->mode == MODE_CORE_RANDOM) {
-        if (show->core_playlist.count <= 0) {
-            printf("[BTN1] RANDOM requested, but playlist is empty\n");
-            return;
-        }
-
-        const char* next = playlist_random(&show->core_playlist, ve->cur.path[0] ? ve->cur.path : NULL);
-        printf("[BTN1] RANDOM -> %s\n", next ? next : "(null)");
-        if (next) {
-            ve_request_transition_opts(ve, next, 1);
-        }
-        return;
-    }
-
-    if (show->mode == MODE_FREUND) {
-        if (show->freund.state != FREUND_STATE_LOOP || show->freund.pair_count <= 0) {
-            printf("[BTN1] FREUND click ignored (state=%d)\n", (int)show->freund.state);
-            return;
-        }
-        if (ve->transitioning || ve->pending) {
-            printf("[BTN1] FREUND click ignored (transition still active)\n");
-            return;
-        }
-
-        int next_idx = (show->freund.active_pair_idx + 1) % show->freund.pair_count;
-        freund_request_pair(show, ve, next_idx);
-        return;
-    }
-
-    if (show->mode == MODE_OMAHEN_8BALL) {
-        if (show->omahen.state != OMAHEN_STATE_IDLE) {
-            printf("[BTN1] OMAHEN click ignored (state=%d)\n", (int)show->omahen.state);
-            return;
-        }
-        if (ve->transitioning || ve->pending) {
-            printf("[BTN1] OMAHEN click ignored (transition still active)\n");
-            return;
-        }
-
-        const char* transition = playlist_random(&show->omahen.transitions, NULL);
-        const char* answer = playlist_random(&show->omahen.answers, NULL);
-        if (!transition || !answer) {
-            printf("[BTN1] OMAHEN missing transition/answer clips\n");
-            return;
-        }
-
-        snprintf(show->omahen.pending_answer, sizeof(show->omahen.pending_answer), "%s", answer);
-        show->omahen.state = OMAHEN_STATE_TRANSITION;
-        printf("[OMAHEN] transition -> %s\n", transition);
-        ve_request_transition_opts(ve, transition, 0);
-        return;
-    }
-}
-
-static void show_update(ShowContext* show, VideoEngine* ve)
-{
-    if (!ve_current_eos(ve)) {
-        return;
-    }
-
-    if (show->mode == MODE_FREUND) {
-        if (show->freund.state == FREUND_STATE_TRANSITION) {
-            freund_request_loop_for_active(show, ve);
-        }
-        return;
-    }
-
-    if (show->mode == MODE_OMAHEN_8BALL) {
-        if (show->omahen.state == OMAHEN_STATE_TRANSITION) {
-            if (show->omahen.pending_answer[0]) {
-                show->omahen.state = OMAHEN_STATE_ANSWER;
-                printf("[OMAHEN] answer -> %s\n", show->omahen.pending_answer);
-                ve_request_transition_opts(ve, show->omahen.pending_answer, 0);
-            }
-            return;
-        }
-
-        if (show->omahen.state == OMAHEN_STATE_ANSWER) {
-            const char* idle = playlist_first(&show->omahen.idle);
-            if (idle) {
-                show->omahen.state = OMAHEN_STATE_IDLE;
-                show->omahen.pending_answer[0] = '\0';
-                printf("[OMAHEN] idle -> %s\n", idle);
-                ve_request_transition_opts(ve, idle, 1);
-            }
-        }
-    }
-}
-
-static void show_maintenance(ShowContext* show, VideoEngine* ve)
-{
-    if (!show || !ve)
-        return;
-
-    if (show->mode == MODE_FREUND &&
-        show->freund.state == FREUND_STATE_LOOP &&
-        !ve->pending &&
-        !ve->transitioning) {
-        freund_prepare_next_pair(show, ve);
     }
 }
 
@@ -718,7 +48,7 @@ static void on_btn1_edit_or_show_action(void* u)
         return;
     }
 
-    show_on_btn1_non_edit(ctx->show, ctx->ve);
+    project_runtime_on_action(ctx->runtime, ctx->ve_fg, ctx->ve_bg);
 }
 
 int main(int argc, char** argv)
@@ -726,8 +56,11 @@ int main(int argc, char** argv)
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
 
+    ProjectRuntime runtime;
+    project_runtime_init(&runtime);
+
     fprintf(stderr, "[BOOT] mapping_video_keystone starting\n");
-    fprintf(stderr, "[BOOT] project profile: %s\n", PROJECT_PROFILE);
+    fprintf(stderr, "[BOOT] project runtime: %s\n", runtime.project_name);
     fflush(stderr);
 
     signal(SIGINT, handle_sigint);
@@ -882,45 +215,49 @@ int main(int argc, char** argv)
     rebuild_mesh_from_corners(&st);
     print_status(&st);
 
-    ShowContext show;
-    show_context_init(&show);
-
-    const char* initial_video = NULL;
-    int initial_loop = 1;
-    if (!show_prepare(&show, argc, argv, &initial_video, &initial_loop)) {
-        fprintf(stderr, "Failed to prepare show for mode '%s'\n", project_mode_name(show.mode));
+    if (!project_runtime_prepare(&runtime, argc, argv)) {
+        fprintf(stderr, "Failed to prepare runtime for profile '%s'\n", runtime.project_name[0] ? runtime.project_name : "core");
         fflush(stderr);
+        project_runtime_shutdown(&runtime);
         return 1;
     }
 
     VideoEngine ve_fg;
     VideoEngine ve_bg;
-    int use_background_layer = (show.mode == MODE_FREUND);
+    int use_background_layer = runtime.use_background_layer;
+
     ve_init(&ve_fg);
     ve_init(&ve_bg);
-    ve_set_prefer_alpha(&ve_fg, 1);
-    ve_set_prefer_alpha(&ve_bg, 0);
+    ve_set_prefer_alpha(&ve_fg, runtime.foreground_prefer_alpha);
+    ve_set_prefer_alpha(&ve_bg, runtime.background_prefer_alpha);
 
 #if PROJECT_DISABLE_XFADE
     ve_set_xfade_seconds(&ve_fg, 0.0f);
+#else
+    if (runtime.foreground_xfade_seconds >= 0.0f) {
+        ve_set_xfade_seconds(&ve_fg, runtime.foreground_xfade_seconds);
+    }
 #endif
 
-    if (!ve_start_current_opts(&ve_fg, initial_video, initial_loop)) {
-        fprintf(stderr, "Failed to start foreground video: %s\n", initial_video ? initial_video : "(null)");
+    if (!runtime.initial_video[0] ||
+        !ve_start_current_opts(&ve_fg, runtime.initial_video, runtime.initial_loop)) {
+        fprintf(stderr, "Failed to start foreground video: %s\n",
+                runtime.initial_video[0] ? runtime.initial_video : "(null)");
         fflush(stderr);
     }
 
     if (use_background_layer) {
-        const char* bg_video = playlist_first(&show.freund.background);
-        if (!bg_video || !ve_start_current_opts(&ve_bg, bg_video, 1)) {
-            fprintf(stderr, "Failed to start background video: %s\n", bg_video ? bg_video : "(null)");
+        if (!runtime.background_video[0] ||
+            !ve_start_current_opts(&ve_bg, runtime.background_video, 1)) {
+            fprintf(stderr, "Failed to start background video: %s\n",
+                    runtime.background_video[0] ? runtime.background_video : "(null)");
             fflush(stderr);
         } else {
-            printf("[FREUND] Background layer -> %s\n", bg_video);
+            printf("[PROJECT] Background layer -> %s\n", runtime.background_video);
         }
     }
 
-    show_after_start(&show, &ve_fg);
+    project_runtime_after_start(&runtime, &ve_fg, &ve_bg);
 
     const char* consumer = "mapping_video_keystone";
     GpioLine* line_btn1 = gpio_request_line(GPIO_BTN1, consumer);
@@ -932,8 +269,9 @@ int main(int argc, char** argv)
 
     Btn1Context btn1_ctx = {
         .st = &st,
-        .show = &show,
-        .ve = &ve_fg
+        .runtime = &runtime,
+        .ve_fg = &ve_fg,
+        .ve_bg = &ve_bg
     };
 
     glClearColor(0.f, 0.f, 0.f, 1.f);
@@ -952,8 +290,8 @@ int main(int argc, char** argv)
             ve_update(&ve_bg);
         }
         ve_update(&ve_fg);
-        show_update(&show, &ve_fg);
-        show_maintenance(&show, &ve_fg);
+        project_runtime_update(&runtime, &ve_fg, &ve_bg);
+        project_runtime_maintenance(&runtime, &ve_fg, &ve_bg);
 
         gpio_process_events(line_btn3, on_btn3_toggle_edit, &st);
         gpio_process_events(line_btn1, on_btn1_edit_or_show_action, &btn1_ctx);
@@ -1015,7 +353,7 @@ int main(int argc, char** argv)
 
     ve_shutdown(&ve_fg);
     ve_shutdown(&ve_bg);
-    show_context_free(&show);
+    project_runtime_shutdown(&runtime);
 
     glDeleteBuffers(1, &vbo);
     glDeleteBuffers(1, &ebo);

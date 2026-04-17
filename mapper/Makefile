@@ -11,6 +11,8 @@ SRC := \
   src/app_state.c \
   src/gpio_helpers.c \
   src/playlist.c \
+  src/project_support.c \
+  src/project_runtime.c \
   src/video.c \
   src/video_engine.c \
   src/input_actions.c \

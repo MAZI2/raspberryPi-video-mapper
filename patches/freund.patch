@@ -1,9 +1,358 @@
---- a/src/project_profile.h
-+++ b/src/project_profile.h
-@@ -1,4 +1,4 @@
+--- a/src/project_profile.h	2026-04-17 11:03:04
++++ b/src/project_profile.h	2026-04-17 11:04:39
+@@ -1,3 +1,3 @@
  #pragma once
  
--#define PROJECT_PROFILE "core"
 -#define PROJECT_DISABLE_XFADE 0
-+#define PROJECT_PROFILE "freund"
 +#define PROJECT_DISABLE_XFADE 1
+--- a/src/project_runtime.c	2026-04-17 11:03:04
++++ b/src/project_runtime.c	2026-04-17 11:04:39
+@@ -3,16 +3,188 @@
+ #include "playlist.h"
+ #include "project_support.h"
+ 
+-static void project_runtime_set_name(ProjectRuntime* runtime)
++#include <ctype.h>
++#include <stdlib.h>
++
++typedef enum {
++    FREUND_STATE_BACKGROUND = 0,
++    FREUND_STATE_TRANSITION = 1,
++    FREUND_STATE_LOOP = 2
++} FreundState;
++
++typedef struct {
++    int step;
++    const char* transition_path;
++    const char* loop_path;
++} FreundPair;
++
++typedef struct {
++    Playlist background;
++    Playlist loops;
++    Playlist transitions;
++    FreundPair* pairs;
++    int pair_count;
++    int active_pair_idx;
++    FreundState state;
++} FreundRuntimeState;
++
++static int freund_parse_step_prefix(const char* path, int* out_step)
+ {
+-    snprintf(runtime->project_name, sizeof(runtime->project_name), "%s", "core");
++    const char* name = mapper_path_basename(path);
++    long value = 0;
++    int i = 0;
++
++    if (!name || !isdigit((unsigned char)name[0])) {
++        return 0;
++    }
++
++    while (name[i] && isdigit((unsigned char)name[i])) {
++        value = (value * 10) + (name[i] - '0');
++        if (value > 1000000) {
++            return 0;
++        }
++        i++;
++    }
++
++    if (name[i] != '-') {
++        return 0;
++    }
++
++    *out_step = (int)value;
++    return 1;
+ }
+ 
++static void freund_runtime_set_name(ProjectRuntime* runtime)
++{
++    snprintf(runtime->project_name, sizeof(runtime->project_name), "freund");
++}
++
++static int freund_pair_cmp(const void* a, const void* b)
++{
++    const FreundPair* pa = (const FreundPair*)a;
++    const FreundPair* pb = (const FreundPair*)b;
++    return pa->step - pb->step;
++}
++
++static int freund_find_loop_for_step(const Playlist* loops, int step, const char** out_path)
++{
++    for (int i = 0; i < loops->count; i++) {
++        int loop_step = 0;
++        if (freund_parse_step_prefix(loops->items[i], &loop_step) && loop_step == step) {
++            *out_path = loops->items[i];
++            return 1;
++        }
++    }
++    return 0;
++}
++
++static int freund_build_pairs(FreundRuntimeState* state)
++{
++    FreundPair* pairs;
++    int count = 0;
++
++    if (state->transitions.count <= 0 || state->loops.count <= 0) {
++        return 0;
++    }
++
++    pairs = (FreundPair*)calloc((size_t)state->transitions.count, sizeof(FreundPair));
++    if (!pairs) {
++        return 0;
++    }
++
++    for (int i = 0; i < state->transitions.count; i++) {
++        int step = 0;
++        const char* loop_path = NULL;
++
++        if (!freund_parse_step_prefix(state->transitions.items[i], &step)) {
++            continue;
++        }
++        if (!freund_find_loop_for_step(&state->loops, step, &loop_path)) {
++            continue;
++        }
++
++        pairs[count].step = step;
++        pairs[count].transition_path = state->transitions.items[i];
++        pairs[count].loop_path = loop_path;
++        count++;
++    }
++
++    if (count <= 0) {
++        free(pairs);
++        return 0;
++    }
++
++    qsort(pairs, (size_t)count, sizeof(FreundPair), freund_pair_cmp);
++    state->pairs = pairs;
++    state->pair_count = count;
++    state->active_pair_idx = -1;
++    state->state = FREUND_STATE_BACKGROUND;
++    return 1;
++}
++
++static void freund_request_pair(ProjectRuntime* runtime, VideoEngine* ve_fg, int pair_idx)
++{
++    FreundRuntimeState* state = (FreundRuntimeState*)runtime->user;
++    const FreundPair* pair;
++
++    if (!state || pair_idx < 0 || pair_idx >= state->pair_count) {
++        return;
++    }
++
++    state->active_pair_idx = pair_idx;
++    state->state = FREUND_STATE_TRANSITION;
++    pair = &state->pairs[pair_idx];
++
++    printf("[FREUND] Step %d: transition -> %s\n", pair->step, pair->transition_path);
++    ve_request_transition_opts(ve_fg, pair->transition_path, 0);
++}
++
++static void freund_request_loop_for_active(ProjectRuntime* runtime, VideoEngine* ve_fg)
++{
++    FreundRuntimeState* state = (FreundRuntimeState*)runtime->user;
++    const FreundPair* pair;
++    int idx;
++
++    if (!state) {
++        return;
++    }
++
++    idx = state->active_pair_idx;
++    if (idx < 0 || idx >= state->pair_count) {
++        return;
++    }
++
++    pair = &state->pairs[idx];
++    state->state = FREUND_STATE_LOOP;
++
++    printf("[FREUND] Step %d: loop -> %s\n", pair->step, pair->loop_path);
++    ve_request_transition_opts(ve_fg, pair->loop_path, 1);
++}
++
++static void freund_prepare_next_pair(ProjectRuntime* runtime, VideoEngine* ve_fg)
++{
++    FreundRuntimeState* state = (FreundRuntimeState*)runtime->user;
++    const FreundPair* pair;
++    int next_idx;
++
++    if (!state || state->pair_count <= 1) {
++        return;
++    }
++    if (state->active_pair_idx < 0 || state->active_pair_idx >= state->pair_count) {
++        return;
++    }
++
++    next_idx = (state->active_pair_idx + 1) % state->pair_count;
++    pair = &state->pairs[next_idx];
++    ve_prepare_transition_opts(ve_fg, pair->transition_path, 0);
++}
++
+ void project_runtime_init(ProjectRuntime* runtime)
+ {
+     memset(runtime, 0, sizeof(*runtime));
+-    project_runtime_set_name(runtime);
+-    runtime->initial_loop = 1;
++    freund_runtime_set_name(runtime);
++    runtime->initial_loop = 0;
++    runtime->use_background_layer = 1;
+     runtime->foreground_prefer_alpha = 1;
+     runtime->background_prefer_alpha = 0;
+     runtime->foreground_xfade_seconds = -1.0f;
+@@ -20,41 +192,61 @@
+ 
+ int project_runtime_prepare(ProjectRuntime* runtime, int argc, char** argv)
+ {
+-    Playlist playlist;
++    FreundRuntimeState* state;
++    const char* background_video;
+ 
+-    memset(&playlist, 0, sizeof(playlist));
++    (void)argc;
++    (void)argv;
+ 
++    state = (FreundRuntimeState*)calloc(1, sizeof(*state));
++    if (!state) {
++        return 0;
++    }
++    runtime->user = state;
++
+     (void)mapper_detect_media_root(runtime->media_root, sizeof(runtime->media_root));
+ 
+     if (runtime->media_root[0]) {
+         printf("[MEDIA] root=%s\n", runtime->media_root);
+     } else {
+         printf("[MEDIA] root not found\n");
++        fprintf(stderr, "[FREUND] MAPPER_MEDIA_ROOT (or fallback videos path) is required\n");
++        return 0;
+     }
+ 
+-    if (argc >= 2 && argv[1] && argv[1][0]) {
+-        snprintf(runtime->initial_video, sizeof(runtime->initial_video), "%s", argv[1]);
+-        return 1;
++    if (!mapper_load_playlist_from_subdir(&state->background, runtime->media_root, "freund/BACKGROUND")) {
++        fprintf(stderr, "[FREUND] Missing videos in freund/BACKGROUND\n");
++        return 0;
+     }
+-
+-    if (!runtime->media_root[0]) {
+-        fprintf(stderr, "[CORE] No initial video path provided and no media root found\n");
++    if (!mapper_load_playlist_from_subdir(&state->loops, runtime->media_root, "freund/LOOP")) {
++        fprintf(stderr, "[FREUND] Missing videos in freund/LOOP\n");
+         return 0;
+     }
+-
+-    if (!playlist_load_from_dir(&playlist, runtime->media_root)) {
+-        fprintf(stderr, "[CORE] No videos found in media root: %s\n", runtime->media_root);
++    if (!mapper_load_playlist_from_subdir(&state->transitions, runtime->media_root, "freund/TRANSITION")) {
++        fprintf(stderr, "[FREUND] Missing videos in freund/TRANSITION\n");
+         return 0;
+     }
++    if (!freund_build_pairs(state)) {
++        fprintf(stderr, "[FREUND] No usable transition/loop pairs (n-*) found\n");
++        return 0;
++    }
+ 
+-    if (!playlist_first(&playlist)) {
+-        playlist_free(&playlist);
+-        fprintf(stderr, "[CORE] Playlist is empty\n");
++    background_video = playlist_first(&state->background);
++    if (!background_video) {
++        fprintf(stderr, "[FREUND] Background playlist is empty\n");
+         return 0;
+     }
+ 
+-    snprintf(runtime->initial_video, sizeof(runtime->initial_video), "%s", playlist_first(&playlist));
+-    playlist_free(&playlist);
++    state->active_pair_idx = 0;
++    state->state = FREUND_STATE_TRANSITION;
++
++    snprintf(runtime->background_video, sizeof(runtime->background_video), "%s", background_video);
++    snprintf(runtime->initial_video, sizeof(runtime->initial_video), "%s", state->pairs[0].transition_path);
++
++    printf("[FREUND] Loaded %d pair(s), background=%s, initial transition=%s\n",
++           state->pair_count,
++           runtime->background_video,
++           runtime->initial_video);
+     return 1;
+ }
+ 
+@@ -67,27 +259,69 @@
+ 
+ void project_runtime_on_action(ProjectRuntime* runtime, VideoEngine* ve_fg, VideoEngine* ve_bg)
+ {
+-    (void)runtime;
+-    (void)ve_fg;
++    FreundRuntimeState* state = (FreundRuntimeState*)runtime->user;
++    int next_idx;
++
+     (void)ve_bg;
+-    printf("[CORE] No project action configured\n");
++
++    if (!state || state->pair_count <= 0) {
++        printf("[BTN1] FREUND click ignored (no pairs)\n");
++        return;
++    }
++    if (state->state != FREUND_STATE_LOOP) {
++        printf("[BTN1] FREUND click ignored (state=%d)\n", (int)state->state);
++        return;
++    }
++    if (ve_fg->transitioning || ve_fg->pending) {
++        printf("[BTN1] FREUND click ignored (transition still active)\n");
++        return;
++    }
++
++    next_idx = (state->active_pair_idx + 1) % state->pair_count;
++    freund_request_pair(runtime, ve_fg, next_idx);
+ }
+ 
+ void project_runtime_update(ProjectRuntime* runtime, VideoEngine* ve_fg, VideoEngine* ve_bg)
+ {
+-    (void)runtime;
+-    (void)ve_fg;
++    FreundRuntimeState* state = (FreundRuntimeState*)runtime->user;
++
+     (void)ve_bg;
++
++    if (!state || !ve_current_eos(ve_fg)) {
++        return;
++    }
++
++    if (state->state == FREUND_STATE_TRANSITION) {
++        freund_request_loop_for_active(runtime, ve_fg);
++    }
+ }
+ 
+ void project_runtime_maintenance(ProjectRuntime* runtime, VideoEngine* ve_fg, VideoEngine* ve_bg)
+ {
+-    (void)runtime;
+-    (void)ve_fg;
++    FreundRuntimeState* state = (FreundRuntimeState*)runtime->user;
++
+     (void)ve_bg;
++
++    if (!state) {
++        return;
++    }
++    if (state->state == FREUND_STATE_LOOP && !ve_fg->pending && !ve_fg->transitioning) {
++        freund_prepare_next_pair(runtime, ve_fg);
++    }
+ }
+ 
+ void project_runtime_shutdown(ProjectRuntime* runtime)
+ {
+-    (void)runtime;
++    FreundRuntimeState* state = (FreundRuntimeState*)runtime->user;
++
++    if (!state) {
++        return;
++    }
++
++    playlist_free(&state->background);
++    playlist_free(&state->loops);
++    playlist_free(&state->transitions);
++    free(state->pairs);
++    free(state);
++    runtime->user = NULL;
+ }

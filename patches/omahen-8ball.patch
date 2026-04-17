@@ -1,9 +1,207 @@
---- a/src/project_profile.h
-+++ b/src/project_profile.h
-@@ -1,4 +1,4 @@
+--- a/src/project_profile.h	2026-04-17 11:03:04
++++ b/src/project_profile.h	2026-04-17 11:04:39
+@@ -1,3 +1,3 @@
  #pragma once
  
--#define PROJECT_PROFILE "core"
 -#define PROJECT_DISABLE_XFADE 0
-+#define PROJECT_PROFILE "omahen-8ball"
 +#define PROJECT_DISABLE_XFADE 1
+--- a/src/project_runtime.c	2026-04-17 11:03:04
++++ b/src/project_runtime.c	2026-04-17 11:04:39
+@@ -3,16 +3,33 @@
+ #include "playlist.h"
+ #include "project_support.h"
+ 
+-static void project_runtime_set_name(ProjectRuntime* runtime)
++#include <stdlib.h>
++
++typedef enum {
++    OMAHEN_STATE_IDLE = 0,
++    OMAHEN_STATE_TRANSITION = 1,
++    OMAHEN_STATE_ANSWER = 2
++} OmahenState;
++
++typedef struct {
++    Playlist idle;
++    Playlist transitions;
++    Playlist answers;
++    OmahenState state;
++    char pending_answer[1024];
++} OmahenRuntimeState;
++
++static void omahen_runtime_set_name(ProjectRuntime* runtime)
+ {
+-    snprintf(runtime->project_name, sizeof(runtime->project_name), "%s", "core");
++    snprintf(runtime->project_name, sizeof(runtime->project_name), "omahen-8ball");
+ }
+ 
+ void project_runtime_init(ProjectRuntime* runtime)
+ {
+     memset(runtime, 0, sizeof(*runtime));
+-    project_runtime_set_name(runtime);
++    omahen_runtime_set_name(runtime);
+     runtime->initial_loop = 1;
++    runtime->use_background_layer = 0;
+     runtime->foreground_prefer_alpha = 1;
+     runtime->background_prefer_alpha = 0;
+     runtime->foreground_xfade_seconds = -1.0f;
+@@ -20,41 +37,55 @@
+ 
+ int project_runtime_prepare(ProjectRuntime* runtime, int argc, char** argv)
+ {
+-    Playlist playlist;
++    OmahenRuntimeState* state;
++    const char* idle_video;
+ 
+-    memset(&playlist, 0, sizeof(playlist));
++    (void)argc;
++    (void)argv;
+ 
++    state = (OmahenRuntimeState*)calloc(1, sizeof(*state));
++    if (!state) {
++        return 0;
++    }
++    runtime->user = state;
++
+     (void)mapper_detect_media_root(runtime->media_root, sizeof(runtime->media_root));
+ 
+     if (runtime->media_root[0]) {
+         printf("[MEDIA] root=%s\n", runtime->media_root);
+     } else {
+         printf("[MEDIA] root not found\n");
++        fprintf(stderr, "[OMAHEN] MAPPER_MEDIA_ROOT (or fallback videos path) is required\n");
++        return 0;
+     }
+ 
+-    if (argc >= 2 && argv[1] && argv[1][0]) {
+-        snprintf(runtime->initial_video, sizeof(runtime->initial_video), "%s", argv[1]);
+-        return 1;
++    if (!mapper_load_playlist_from_subdir(&state->idle, runtime->media_root, "omahen/IDLE")) {
++        fprintf(stderr, "[OMAHEN] Missing videos in omahen/IDLE\n");
++        return 0;
+     }
+-
+-    if (!runtime->media_root[0]) {
+-        fprintf(stderr, "[CORE] No initial video path provided and no media root found\n");
++    if (!mapper_load_playlist_from_subdir(&state->transitions, runtime->media_root, "omahen/TRANSITION")) {
++        fprintf(stderr, "[OMAHEN] Missing videos in omahen/TRANSITION\n");
+         return 0;
+     }
+-
+-    if (!playlist_load_from_dir(&playlist, runtime->media_root)) {
+-        fprintf(stderr, "[CORE] No videos found in media root: %s\n", runtime->media_root);
++    if (!mapper_load_playlist_from_subdir(&state->answers, runtime->media_root, "omahen/ANSWER")) {
++        fprintf(stderr, "[OMAHEN] Missing videos in omahen/ANSWER\n");
+         return 0;
+     }
+ 
+-    if (!playlist_first(&playlist)) {
+-        playlist_free(&playlist);
+-        fprintf(stderr, "[CORE] Playlist is empty\n");
++    idle_video = playlist_first(&state->idle);
++    if (!idle_video) {
++        fprintf(stderr, "[OMAHEN] Idle playlist is empty\n");
+         return 0;
+     }
+ 
+-    snprintf(runtime->initial_video, sizeof(runtime->initial_video), "%s", playlist_first(&playlist));
+-    playlist_free(&playlist);
++    state->state = OMAHEN_STATE_IDLE;
++    state->pending_answer[0] = '\0';
++
++    snprintf(runtime->initial_video, sizeof(runtime->initial_video), "%s", idle_video);
++    printf("[OMAHEN] Loaded idle=%d transition=%d answer=%d\n",
++           state->idle.count,
++           state->transitions.count,
++           state->answers.count);
+     return 1;
+ }
+ 
+@@ -67,17 +98,66 @@
+ 
+ void project_runtime_on_action(ProjectRuntime* runtime, VideoEngine* ve_fg, VideoEngine* ve_bg)
+ {
+-    (void)runtime;
+-    (void)ve_fg;
++    OmahenRuntimeState* state = (OmahenRuntimeState*)runtime->user;
++    const char* transition;
++    const char* answer;
++
+     (void)ve_bg;
+-    printf("[CORE] No project action configured\n");
++
++    if (!state) {
++        return;
++    }
++    if (state->state != OMAHEN_STATE_IDLE) {
++        printf("[BTN1] OMAHEN click ignored (state=%d)\n", (int)state->state);
++        return;
++    }
++    if (ve_fg->transitioning || ve_fg->pending) {
++        printf("[BTN1] OMAHEN click ignored (transition still active)\n");
++        return;
++    }
++
++    transition = playlist_random(&state->transitions, NULL);
++    answer = playlist_random(&state->answers, NULL);
++    if (!transition || !answer) {
++        printf("[BTN1] OMAHEN missing transition/answer clips\n");
++        return;
++    }
++
++    snprintf(state->pending_answer, sizeof(state->pending_answer), "%s", answer);
++    state->state = OMAHEN_STATE_TRANSITION;
++    printf("[OMAHEN] transition -> %s\n", transition);
++    ve_request_transition_opts(ve_fg, transition, 0);
+ }
+ 
+ void project_runtime_update(ProjectRuntime* runtime, VideoEngine* ve_fg, VideoEngine* ve_bg)
+ {
+-    (void)runtime;
+-    (void)ve_fg;
++    OmahenRuntimeState* state = (OmahenRuntimeState*)runtime->user;
++    const char* idle;
++
+     (void)ve_bg;
++
++    if (!state || !ve_current_eos(ve_fg)) {
++        return;
++    }
++
++    if (state->state == OMAHEN_STATE_TRANSITION) {
++        if (state->pending_answer[0]) {
++            state->state = OMAHEN_STATE_ANSWER;
++            printf("[OMAHEN] answer -> %s\n", state->pending_answer);
++            ve_request_transition_opts(ve_fg, state->pending_answer, 0);
++        }
++        return;
++    }
++
++    if (state->state == OMAHEN_STATE_ANSWER) {
++        idle = playlist_first(&state->idle);
++        if (idle) {
++            state->state = OMAHEN_STATE_IDLE;
++            state->pending_answer[0] = '\0';
++            printf("[OMAHEN] idle -> %s\n", idle);
++            ve_request_transition_opts(ve_fg, idle, 1);
++        }
++    }
+ }
+ 
+ void project_runtime_maintenance(ProjectRuntime* runtime, VideoEngine* ve_fg, VideoEngine* ve_bg)
+@@ -89,5 +169,15 @@
+ 
+ void project_runtime_shutdown(ProjectRuntime* runtime)
+ {
+-    (void)runtime;
++    OmahenRuntimeState* state = (OmahenRuntimeState*)runtime->user;
++
++    if (!state) {
++        return;
++    }
++
++    playlist_free(&state->idle);
++    playlist_free(&state->transitions);
++    playlist_free(&state->answers);
++    free(state);
++    runtime->user = NULL;
+ }
