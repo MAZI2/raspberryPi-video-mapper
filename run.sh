@@ -115,11 +115,19 @@ sync_video_cache() {
   fi
 }
 
-PATCH="$(get_config_value "project_patch" "")"
+PROJECT_NAME="$(get_config_value "project" "")"
+LEGACY_PATCH="$(get_config_value "project_patch" "")"
 USB_LABEL="$(get_config_value "usb_label" "")"
 VIDEO_CACHE_DIR="$PWD/.cache/videos"
 VIDEO_SOURCE_DIR=""
 MEDIA_ROOT=""
+PATCH=""
+
+if [[ -n "$PROJECT_NAME" ]]; then
+  PATCH="patches/${PROJECT_NAME}.patch"
+elif [[ -n "$LEGACY_PATCH" ]]; then
+  PATCH="$LEGACY_PATCH"
+fi
 
 if [[ -n "$USB_LABEL" ]]; then
   VIDEO_SOURCE_DIR="$(resolve_usb_videos_root "$USB_LABEL" || true)"
@@ -141,6 +149,10 @@ rsync -a --delete mapper/ "$BUILD_DIR/"
 if [[ -n "$PATCH" ]]; then
   PATCH_FILE="$PATCH"
   [[ "${PATCH_FILE#/}" = "$PATCH_FILE" ]] && PATCH_FILE="$PWD/$PATCH_FILE"
+  if [[ ! -f "$PATCH_FILE" ]]; then
+    printf 'Configured project patch not found: %s\n' "$PATCH_FILE" >&2
+    exit 1
+  fi
   patch -d "$BUILD_DIR" -p1 < "$PATCH_FILE"
 fi
 

@@ -175,6 +175,14 @@ resolve_patch_path() {
   return 1
 }
 
+resolve_project_patch() {
+  local project_name="$1"
+  local source_root="$2"
+
+  [[ -n "${project_name}" ]] || return 1
+  resolve_patch_path "patches/${project_name}.patch" "${source_root}"
+}
+
 prepare_candidate() {
   local source_dir="$1"
   local candidate_dir="$2"
@@ -282,12 +290,24 @@ else
   log "No USB project found, using local copy if available"
 fi
 
+configured_project="$(get_config_value "project" "")"
 configured_patch="$(get_config_value "project_patch" "")"
 patch_file=""
-if [[ -n "${configured_patch}" ]]; then
+if [[ -n "${configured_project}" ]]; then
+  if [[ -n "${source_dir}" ]]; then
+    if patch_file="$(resolve_project_patch "${configured_project}" "${source_root}")"; then
+      log "Project selected: ${configured_project}"
+    else
+      log "Configured project patch not found: patches/${configured_project}.patch"
+      exit 1
+    fi
+  else
+    log "Configured project '${configured_project}' will be applied on next USB sync"
+  fi
+elif [[ -n "${configured_patch}" ]]; then
   if [[ -n "${source_dir}" ]]; then
     if patch_file="$(resolve_patch_path "${configured_patch}" "${source_root}")"; then
-      log "Project patch selected: ${configured_patch}"
+      log "Legacy project patch selected: ${configured_patch}"
     else
       log "Configured patch not found: ${configured_patch}"
       exit 1

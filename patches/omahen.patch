@@ -1,13 +1,13 @@
 --- a/src/project_profile.h	2026-04-17 11:03:04
-+++ b/src/project_profile.h	2026-04-17 11:04:39
++++ b/src/project_profile.h	2026-04-17 11:45:31
 @@ -1,3 +1,3 @@
  #pragma once
  
 -#define PROJECT_DISABLE_XFADE 0
 +#define PROJECT_DISABLE_XFADE 1
 --- a/src/project_runtime.c	2026-04-17 11:03:04
-+++ b/src/project_runtime.c	2026-04-17 11:04:39
-@@ -3,16 +3,33 @@
++++ b/src/project_runtime.c	2026-04-17 11:45:31
+@@ -3,16 +3,46 @@
  #include "playlist.h"
  #include "project_support.h"
  
@@ -17,7 +17,8 @@
 +typedef enum {
 +    OMAHEN_STATE_IDLE = 0,
 +    OMAHEN_STATE_TRANSITION = 1,
-+    OMAHEN_STATE_ANSWER = 2
++    OMAHEN_STATE_ANSWER = 2,
++    OMAHEN_STATE_RETURNING_TO_IDLE = 3
 +} OmahenState;
 +
 +typedef struct {
@@ -25,15 +26,27 @@
 +    Playlist transitions;
 +    Playlist answers;
 +    OmahenState state;
++    char idle_path[1024];
 +    char pending_answer[1024];
 +} OmahenRuntimeState;
 +
 +static void omahen_runtime_set_name(ProjectRuntime* runtime)
  {
 -    snprintf(runtime->project_name, sizeof(runtime->project_name), "%s", "core");
-+    snprintf(runtime->project_name, sizeof(runtime->project_name), "omahen-8ball");
++    snprintf(runtime->project_name, sizeof(runtime->project_name), "omahen");
  }
  
++static int omahen_idle_active(OmahenRuntimeState* state, VideoEngine* ve_fg)
++{
++    if (!state || !ve_fg) {
++        return 0;
++    }
++    if (ve_fg->transitioning || ve_fg->pending) {
++        return 0;
++    }
++    return state->idle_path[0] && strcmp(ve_fg->cur.path, state->idle_path) == 0;
++}
++
  void project_runtime_init(ProjectRuntime* runtime)
  {
      memset(runtime, 0, sizeof(*runtime));
@@ -44,7 +57,7 @@
      runtime->foreground_prefer_alpha = 1;
      runtime->background_prefer_alpha = 0;
      runtime->foreground_xfade_seconds = -1.0f;
-@@ -20,41 +37,55 @@
+@@ -20,41 +50,56 @@
  
  int project_runtime_prepare(ProjectRuntime* runtime, int argc, char** argv)
  {
@@ -107,6 +120,7 @@
 -    playlist_free(&playlist);
 +    state->state = OMAHEN_STATE_IDLE;
 +    state->pending_answer[0] = '\0';
++    snprintf(state->idle_path, sizeof(state->idle_path), "%s", idle_video);
 +
 +    snprintf(runtime->initial_video, sizeof(runtime->initial_video), "%s", idle_video);
 +    printf("[OMAHEN] Loaded idle=%d transition=%d answer=%d\n",
@@ -116,7 +130,7 @@
      return 1;
  }
  
-@@ -67,17 +98,66 @@
+@@ -67,27 +112,92 @@
  
  void project_runtime_on_action(ProjectRuntime* runtime, VideoEngine* ve_fg, VideoEngine* ve_bg)
  {
@@ -136,8 +150,8 @@
 +        printf("[BTN1] OMAHEN click ignored (state=%d)\n", (int)state->state);
 +        return;
 +    }
-+    if (ve_fg->transitioning || ve_fg->pending) {
-+        printf("[BTN1] OMAHEN click ignored (transition still active)\n");
++    if (!omahen_idle_active(state, ve_fg)) {
++        printf("[BTN1] OMAHEN click ignored (idle not fully restored)\n");
 +        return;
 +    }
 +
@@ -159,7 +173,6 @@
 -    (void)runtime;
 -    (void)ve_fg;
 +    OmahenRuntimeState* state = (OmahenRuntimeState*)runtime->user;
-+    const char* idle;
 +
      (void)ve_bg;
 +
@@ -177,18 +190,31 @@
 +    }
 +
 +    if (state->state == OMAHEN_STATE_ANSWER) {
-+        idle = playlist_first(&state->idle);
-+        if (idle) {
-+            state->state = OMAHEN_STATE_IDLE;
-+            state->pending_answer[0] = '\0';
-+            printf("[OMAHEN] idle -> %s\n", idle);
-+            ve_request_transition_opts(ve_fg, idle, 1);
++        if (state->idle_path[0]) {
++            state->state = OMAHEN_STATE_RETURNING_TO_IDLE;
++            printf("[OMAHEN] idle -> %s\n", state->idle_path);
++            ve_request_transition_opts(ve_fg, state->idle_path, 1);
 +        }
 +    }
  }
  
  void project_runtime_maintenance(ProjectRuntime* runtime, VideoEngine* ve_fg, VideoEngine* ve_bg)
-@@ -89,5 +169,15 @@
+ {
+-    (void)runtime;
+-    (void)ve_fg;
++    OmahenRuntimeState* state = (OmahenRuntimeState*)runtime->user;
++
+     (void)ve_bg;
++
++    if (!state) {
++        return;
++    }
++    if (state->state == OMAHEN_STATE_RETURNING_TO_IDLE && omahen_idle_active(state, ve_fg)) {
++        state->state = OMAHEN_STATE_IDLE;
++        state->pending_answer[0] = '\0';
++        printf("[OMAHEN] idle restored\n");
++    }
+ }
  
  void project_runtime_shutdown(ProjectRuntime* runtime)
  {
