@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SKIP_PACKAGES=0
+if [[ "${1:-}" == "--skip-packages" ]]; then
+  SKIP_PACKAGES=1
+  shift
+fi
+
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run this installer with sudo or as root."
   exit 1
@@ -42,11 +48,15 @@ APT_PACKAGES=(
   rsync
 )
 
-echo "Updating apt package index..."
-apt-get update
+if [[ "${SKIP_PACKAGES}" -eq 0 ]]; then
+  echo "Updating apt package index..."
+  apt-get update
 
-echo "Installing/verifying mapper dependencies..."
-DEBIAN_FRONTEND=noninteractive apt-get install -y "${APT_PACKAGES[@]}"
+  echo "Installing/verifying mapper dependencies..."
+  DEBIAN_FRONTEND=noninteractive apt-get install -y "${APT_PACKAGES[@]}"
+else
+  echo "Skipping apt package installation (--skip-packages)."
+fi
 
 INSTALLED_BOOT_SCRIPT="/usr/local/bin/mapper_boot_runner.sh"
 SERVICE_PATH="/etc/systemd/system/mapper_boot_mapper.service"
@@ -76,6 +86,10 @@ LOCAL_BOOT_CONFIG="${LOCAL_PROJECT_ROOT}/${BOOT_CONFIG_NAME}"
 BINARY_NAME="mapping_video_keystone"
 BOOT_WAIT_SECONDS=30
 BOOT_WAIT_INTERVAL=2
+DRM_WAIT_SECONDS=45
+DRM_WAIT_INTERVAL=2
+LAUNCH_RETRY_COUNT=6
+LAUNCH_RETRY_DELAY=5
 TEMP_MOUNT_BASE="/run/mapper-usb-mounts"
 ACTIVE_TEMP_MOUNT=""
 TEMP_CANDIDATE_DIR=""
@@ -101,6 +115,111 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+log_drm_state() {
+  if [[ -d /dev/dri ]]; then
+    log "DRM devices:"
+    ls -l /dev/dri | sed 's/^/  /'
+  else
+    log "/dev/dri is not present"
+  fi
+
+  if command -v pgrep >/dev/null 2>&1; then
+    local holders=""
+    holders="$(pgrep -af 'weston|wayfire|labwc|Xorg|Xwayland|sway|cage|kmscube|chromium|vlc' 2>/dev/null || true)"
+    if [[ -n "${holders}" ]]; then
+      log "Possible DRM/compositor processes already running:"
+      printf '%s\n' "${holders}" | sed 's/^/  /'
+    fi
+  fi
+}
+
+drm_ready() {
+  [[ -e /dev/dri/card0 || -e /dev/dri/renderD128 ]]
+}
+
+wait_for_drm_ready() {
+  local attempts i
+  attempts=$((DRM_WAIT_SECONDS / DRM_WAIT_INTERVAL))
+
+  if drm_ready; then
+    return 0
+  fi
+
+  log "Waiting for DRM/KMS devices to become available"
+  for ((i=0; i<=attempts; i++)); do
+    if drm_ready; then
+      log "DRM/KMS devices are available"
+      return 0
+    fi
+
+    if (( i == 0 || i == attempts || i % 5 == 0 )); then
+      log_drm_state
+    fi
+    sleep "${DRM_WAIT_INTERVAL}"
+  done
+
+  log "Timed out waiting for DRM/KMS devices"
+  log_drm_state
+  return 1
+}
+
+kmsdrm_error_in_log() {
+  local log_file="$1"
+  [[ -f "${log_file}" ]] || return 1
+  grep -qiE 'kmsdrm|KMSDRM|No available video device|SDL init failed|Window creation failed|GL context creation failed' "${log_file}"
+}
+
+launch_mapper_once() {
+  local launch_log="$1"
+
+  (
+    cd "${LOCAL_MAPPER_DIR}"
+    if [[ -n "${CONFIGURED_USB_LABEL}" ]]; then
+      SDL_VIDEODRIVER=kmsdrm MAPPER_USB_LABEL="${CONFIGURED_USB_LABEL}" MAPPER_FOLDER_NAME="${CONFIGURED_MAPPER_FOLDER_NAME}" MAPPER_VIDEOS_PATH="${CONFIGURED_VIDEOS_PATH}" "./${BINARY_NAME}"
+    else
+      SDL_VIDEODRIVER=kmsdrm MAPPER_FOLDER_NAME="${CONFIGURED_MAPPER_FOLDER_NAME}" MAPPER_VIDEOS_PATH="${CONFIGURED_VIDEOS_PATH}" "./${BINARY_NAME}"
+    fi
+  ) 2>&1 | tee "${launch_log}"
+}
+
+launch_mapper_with_retries() {
+  local attempt launch_log app_rc
+
+  for ((attempt=1; attempt<=LAUNCH_RETRY_COUNT; attempt++)); do
+    wait_for_drm_ready || true
+
+    launch_log="$(mktemp /run/mapper-launch.XXXXXX.log)"
+    log "Launch attempt ${attempt}/${LAUNCH_RETRY_COUNT}"
+
+    set +e
+    launch_mapper_once "${launch_log}"
+    app_rc=$?
+    set -e
+
+    if [[ "${app_rc}" -eq 0 ]]; then
+      rm -f "${launch_log}"
+      return 0
+    fi
+
+    if kmsdrm_error_in_log "${launch_log}"; then
+      log "Detected transient KMSDRM/SDL startup failure on attempt ${attempt} (exit ${app_rc})"
+      log_drm_state
+      rm -f "${launch_log}"
+
+      if (( attempt < LAUNCH_RETRY_COUNT )); then
+        log "Retrying in ${LAUNCH_RETRY_DELAY}s"
+        sleep "${LAUNCH_RETRY_DELAY}"
+        continue
+      fi
+    fi
+
+    rm -f "${launch_log}"
+    return "${app_rc}"
+  done
+
+  return 1
+}
 
 mount_partition_temporarily() {
   local device="$1"
@@ -435,14 +554,7 @@ if ! should_start_app; then
 fi
 
 log "Launching ${BINARY_NAME}"
-(
-  cd "${LOCAL_MAPPER_DIR}"
-  if [[ -n "${CONFIGURED_USB_LABEL}" ]]; then
-    SDL_VIDEODRIVER=kmsdrm MAPPER_USB_LABEL="${CONFIGURED_USB_LABEL}" MAPPER_FOLDER_NAME="${CONFIGURED_MAPPER_FOLDER_NAME}" MAPPER_VIDEOS_PATH="${CONFIGURED_VIDEOS_PATH}" "./${BINARY_NAME}"
-  else
-    SDL_VIDEODRIVER=kmsdrm MAPPER_FOLDER_NAME="${CONFIGURED_MAPPER_FOLDER_NAME}" MAPPER_VIDEOS_PATH="${CONFIGURED_VIDEOS_PATH}" "./${BINARY_NAME}"
-  fi
-)
+launch_mapper_with_retries
 app_rc=$?
 log "${BINARY_NAME} exited with code ${app_rc}"
 exit "${app_rc}"
