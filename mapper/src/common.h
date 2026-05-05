@@ -27,12 +27,12 @@
 #define GRID_Y 9
 
 // MiniMAD board GPIOs (BCM)
-#define GPIO_BTN1   17  // cycle corner (EDIT ON), show action (EDIT OFF)
+#define GPIO_BTN1   17  // cycle corner (EDIT ON), inactive (EDIT OFF)
 #define GPIO_BTN2   18  // free / unused
 #define GPIO_BTN3   27  // toggle EDIT mode
 #define GPIO_UP     24
 #define GPIO_DOWN   22
-#define GPIO_LEFT   25
+#define GPIO_LEFT   25  // move left (EDIT ON), show action (EDIT OFF)
 #define GPIO_RIGHT  23
 
 extern volatile int keepRunning;

@@ -21,7 +21,7 @@ typedef struct {
     ProjectRuntime* runtime;
     VideoEngine* ve_fg;
     VideoEngine* ve_bg;
-} Btn1Context;
+} ActionContext;
 
 static void gl_check(const char* where)
 {
@@ -32,19 +32,34 @@ static void gl_check(const char* where)
     }
 }
 
-static void on_btn1_edit_or_show_action(void* u)
+static void on_btn1_cycle_corner(void* u)
 {
-    Btn1Context* ctx = (Btn1Context*)u;
-    AppState* st = ctx->st;
+    AppState* st = (AppState*)u;
 
     if (!debounce_ok(&st->last_btn1)) {
         return;
     }
 
+    if (!st->edit_mode) {
+        return;
+    }
+
+    st->selected_ui = (st->selected_ui + 1) % 4;
+    printf("[BTN1] SELECT %s\n", corner_name_ui(st->selected_ui));
+    print_status(st);
+}
+
+static void on_left_or_show_action(void* u)
+{
+    ActionContext* ctx = (ActionContext*)u;
+    AppState* st = ctx->st;
+
+    if (!debounce_ok(&st->last_left)) {
+        return;
+    }
+
     if (st->edit_mode) {
-        st->selected_ui = (st->selected_ui + 1) % 4;
-        printf("[BTN1] SELECT %s\n", corner_name_ui(st->selected_ui));
-        print_status(st);
+        move_selected_corner(st, -st->moveSpeed, 0.0f);
         return;
     }
 
@@ -267,7 +282,7 @@ int main(int argc, char** argv)
     GpioLine* line_left = gpio_request_line(GPIO_LEFT, consumer);
     GpioLine* line_right = gpio_request_line(GPIO_RIGHT, consumer);
 
-    Btn1Context btn1_ctx = {
+    ActionContext action_ctx = {
         .st = &st,
         .runtime = &runtime,
         .ve_fg = &ve_fg,
@@ -294,10 +309,10 @@ int main(int argc, char** argv)
         project_runtime_maintenance(&runtime, &ve_fg, &ve_bg);
 
         gpio_process_events(line_btn3, on_btn3_toggle_edit, &st);
-        gpio_process_events(line_btn1, on_btn1_edit_or_show_action, &btn1_ctx);
+        gpio_process_events(line_btn1, on_btn1_cycle_corner, &st);
         gpio_process_events(line_up, on_up, &st);
         gpio_process_events(line_down, on_down, &st);
-        gpio_process_events(line_left, on_left, &st);
+        gpio_process_events(line_left, on_left_or_show_action, &action_ctx);
         gpio_process_events(line_right, on_right, &st);
 
         glUseProgram(program);
